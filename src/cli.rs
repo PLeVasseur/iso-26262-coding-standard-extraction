@@ -17,6 +17,7 @@ pub struct Cli {
 pub enum Commands {
     Inventory(InventoryArgs),
     Ingest(IngestArgs),
+    Query(QueryArgs),
     Status(StatusArgs),
 }
 
@@ -63,4 +64,28 @@ pub struct IngestArgs {
 pub struct StatusArgs {
     #[arg(long, default_value = ".cache/iso26262")]
     pub cache_root: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct QueryArgs {
+    #[arg(long, default_value = ".cache/iso26262")]
+    pub cache_root: PathBuf,
+
+    #[arg(long)]
+    pub db_path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub query: String,
+
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+
+    #[arg(long)]
+    pub part: Option<u32>,
+
+    #[arg(long = "type")]
+    pub chunk_type: Option<String>,
+
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
 }

@@ -28,6 +28,7 @@ fn run() -> Result<()> {
     match cli.command {
         Commands::Inventory(args) => commands::inventory::run(args),
         Commands::Ingest(args) => commands::ingest::run(args),
+        Commands::Query(args) => commands::query::run(args),
         Commands::Status(args) => commands::status::run(args),
     }
 }
