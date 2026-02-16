@@ -2511,3 +2511,89 @@ fn render_ingest_command(args: &IngestArgs) -> String {
 
     command.join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_marker_label_handles_common_forms() {
+        assert_eq!(normalize_marker_label("b)"), "b");
+        assert_eq!(normalize_marker_label("NOTE 2"), "NOTE 2");
+        assert_eq!(normalize_marker_label("—"), "-");
+    }
+
+    #[test]
+    fn reconstruct_table_rows_assigns_marker_list_to_following_lines() {
+        let lines = vec![
+            "1a 1b 1c",
+            "First requirement description",
+            "++",
+            "Second requirement description",
+            "+",
+            "Third requirement description",
+            "++",
+        ];
+
+        let rows = reconstruct_table_rows_from_markers(&lines);
+        assert_eq!(rows.len(), 3);
+
+        assert_eq!(rows[0][0], "1a");
+        assert!(rows[0][1].contains("First requirement"));
+        assert!(rows[0].iter().any(|cell| cell == "++"));
+
+        assert_eq!(rows[1][0], "1b");
+        assert!(rows[1][1].contains("Second requirement"));
+
+        assert_eq!(rows[2][0], "1c");
+        assert!(rows[2][1].contains("Third requirement"));
+    }
+
+    #[test]
+    fn analyze_table_rows_tracks_sparse_and_overloaded_patterns() {
+        let rows = vec![
+            vec![
+                "1a".to_string(),
+                "Valid description".to_string(),
+                "++".to_string(),
+            ],
+            vec!["1b".to_string(), String::new(), "+".to_string()],
+            vec![
+                "1c".to_string(),
+                "Contains merged marker 1d text".to_string(),
+                "++".to_string(),
+            ],
+        ];
+
+        let counters = analyze_table_rows(&rows);
+        assert_eq!(counters.rows_with_markers_count, 3);
+        assert_eq!(counters.rows_with_descriptions_count, 2);
+        assert_eq!(counters.sparse_rows_count, 1);
+        assert_eq!(counters.overloaded_rows_count, 1);
+        assert_eq!(counters.marker_observed_count, 3);
+        assert_eq!(counters.marker_expected_count, 3);
+    }
+
+    #[test]
+    fn prefer_reconstructed_rows_when_quality_improves() {
+        let original = TableQualityCounters {
+            sparse_rows_count: 4,
+            overloaded_rows_count: 1,
+            rows_with_markers_count: 5,
+            rows_with_descriptions_count: 1,
+            marker_expected_count: 5,
+            marker_observed_count: 5,
+        };
+        let reconstructed = TableQualityCounters {
+            sparse_rows_count: 1,
+            overloaded_rows_count: 1,
+            rows_with_markers_count: 5,
+            rows_with_descriptions_count: 4,
+            marker_expected_count: 5,
+            marker_observed_count: 5,
+        };
+
+        let preferred = prefer_reconstructed_rows(5, &original, 5, &reconstructed);
+        assert!(preferred);
+    }
+}
