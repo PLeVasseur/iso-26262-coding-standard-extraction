@@ -19,6 +19,7 @@ pub enum Commands {
     Ingest(IngestArgs),
     Query(QueryArgs),
     Status(StatusArgs),
+    Validate(ValidateArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -88,4 +89,19 @@ pub struct QueryArgs {
 
     #[arg(long, default_value_t = false)]
     pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ValidateArgs {
+    #[arg(long, default_value = ".cache/iso26262")]
+    pub cache_root: PathBuf,
+
+    #[arg(long)]
+    pub db_path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub gold_manifest_path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub quality_report_path: Option<PathBuf>,
 }

@@ -30,6 +30,7 @@ fn run() -> Result<()> {
         Commands::Ingest(args) => commands::ingest::run(args),
         Commands::Query(args) => commands::query::run(args),
         Commands::Status(args) => commands::status::run(args),
+        Commands::Validate(args) => commands::validate::run(args),
     }
 }
 
