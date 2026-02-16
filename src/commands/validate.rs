@@ -15,6 +15,9 @@ const TABLE_SPARSE_ROW_RATIO_MAX: f64 = 0.20;
 const TABLE_OVERLOADED_ROW_RATIO_MAX: f64 = 0.10;
 const TABLE_MARKER_SEQUENCE_COVERAGE_MIN: f64 = 0.90;
 const TABLE_DESCRIPTION_COVERAGE_MIN: f64 = 0.90;
+const MARKER_EXTRACTION_COVERAGE_MIN: f64 = 0.95;
+const MARKER_CITATION_ACCURACY_MIN: f64 = 0.90;
+const PARAGRAPH_CITATION_ACCURACY_MIN: f64 = 0.90;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GoldSetManifest {
@@ -275,6 +278,33 @@ pub fn run(args: ValidateArgs) -> Result<()> {
                 .to_string(),
         );
     }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-015" && check.result == "failed")
+    {
+        recommendations.push(
+            "Improve marker extraction coverage by expanding marker parsing for list and note patterns."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-016" && check.result == "failed")
+    {
+        recommendations.push(
+            "Improve marker citation accuracy by validating expected marker labels against extracted anchors."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-017" && check.result == "failed")
+    {
+        recommendations.push(
+            "Improve paragraph fallback citation accuracy by stabilizing paragraph segmentation and indices."
+                .to_string(),
+        );
+    }
 
     let report = QualityReport {
         manifest_version: 1,
@@ -511,6 +541,84 @@ fn evaluate_reference(
             .ok();
     }
 
+    if row.is_none() {
+        row = connection
+            .query_row(
+                "
+                SELECT
+                  node_type,
+                  page_pdf_start,
+                  page_pdf_end,
+                  source_hash,
+                  text,
+                  node_id,
+                  node_type,
+                  ancestor_path,
+                  anchor_type,
+                  anchor_label_norm
+                FROM nodes
+                WHERE doc_id = ?1 AND lower(ref) = lower(?2)
+                ORDER BY page_pdf_start
+                LIMIT 1
+                ",
+                params![reference.doc_id, reference.reference],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                    ))
+                },
+            )
+            .ok();
+    }
+
+    if row.is_none() {
+        row = connection
+            .query_row(
+                "
+                SELECT
+                  node_type,
+                  page_pdf_start,
+                  page_pdf_end,
+                  source_hash,
+                  text,
+                  node_id,
+                  node_type,
+                  ancestor_path,
+                  anchor_type,
+                  anchor_label_norm
+                FROM nodes
+                WHERE doc_id = ?1 AND lower(ref) LIKE '%' || lower(?2) || '%'
+                ORDER BY page_pdf_start
+                LIMIT 1
+                ",
+                params![reference.doc_id, reference.reference],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                    ))
+                },
+            )
+            .ok();
+    }
+
     let Some((
         chunk_type,
         page_start,
@@ -671,6 +779,18 @@ fn build_quality_checks(
                     |_| Ok(1_i64),
                 )
                 .is_ok()
+                || connection
+                    .query_row(
+                        "
+                        SELECT 1
+                        FROM nodes
+                        WHERE doc_id = ?1 AND lower(ref) = lower(?2)
+                        LIMIT 1
+                        ",
+                        params![reference.0.doc_id, reference.0.reference],
+                        |_| Ok(1_i64),
+                    )
+                    .is_ok()
         })
         .count();
 
@@ -872,6 +992,101 @@ fn build_quality_checks(
         .to_string(),
     });
 
+    let marker_expected_total = evaluable
+        .iter()
+        .filter(|(reference, _)| {
+            reference
+                .expected_anchor_type
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("marker"))
+                .unwrap_or(false)
+                || reference.expected_marker_label.is_some()
+        })
+        .count();
+    let marker_extracted_ok = evaluable
+        .iter()
+        .filter(|(reference, eval)| {
+            (reference
+                .expected_anchor_type
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("marker"))
+                .unwrap_or(false)
+                || reference.expected_marker_label.is_some())
+                && eval.found
+                && eval.hierarchy_ok
+        })
+        .count();
+    let marker_citation_ok = evaluable
+        .iter()
+        .filter(|(reference, eval)| {
+            (reference
+                .expected_anchor_type
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("marker"))
+                .unwrap_or(false)
+                || reference.expected_marker_label.is_some())
+                && eval.found
+                && eval.hierarchy_ok
+                && eval.page_start.is_some()
+                && eval.page_end.is_some()
+        })
+        .count();
+
+    let paragraph_expected_total = evaluable
+        .iter()
+        .filter(|(reference, _)| {
+            reference
+                .expected_anchor_type
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("paragraph"))
+                .unwrap_or(false)
+                || reference.expected_paragraph_index.is_some()
+        })
+        .count();
+    let paragraph_citation_ok = evaluable
+        .iter()
+        .filter(|(reference, eval)| {
+            (reference
+                .expected_anchor_type
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("paragraph"))
+                .unwrap_or(false)
+                || reference.expected_paragraph_index.is_some())
+                && eval.found
+                && eval.hierarchy_ok
+                && eval.page_start.is_some()
+                && eval.page_end.is_some()
+        })
+        .count();
+
+    checks.push(QualityCheck {
+        check_id: "Q-015".to_string(),
+        name: "Marker extraction coverage threshold".to_string(),
+        result: evaluate_min_threshold(
+            ratio(marker_extracted_ok, marker_expected_total),
+            MARKER_EXTRACTION_COVERAGE_MIN,
+        )
+        .to_string(),
+    });
+    checks.push(QualityCheck {
+        check_id: "Q-016".to_string(),
+        name: "Marker citation accuracy threshold".to_string(),
+        result: evaluate_min_threshold(
+            ratio(marker_citation_ok, marker_expected_total),
+            MARKER_CITATION_ACCURACY_MIN,
+        )
+        .to_string(),
+    });
+    checks.push(QualityCheck {
+        check_id: "Q-017".to_string(),
+        name: "Paragraph fallback citation accuracy threshold".to_string(),
+        result: evaluate_min_threshold(
+            ratio(paragraph_citation_ok, paragraph_expected_total),
+            PARAGRAPH_CITATION_ACCURACY_MIN,
+        )
+        .to_string(),
+    });
+
     Ok(checks)
 }
 
@@ -917,10 +1132,25 @@ fn collect_hierarchy_stats(
     let parent_ref = connection
         .query_row(
             "
-            SELECT p.ref
-            FROM nodes n
-            LEFT JOIN nodes p ON p.node_id = n.parent_node_id
-            WHERE n.node_id = ?1
+            WITH RECURSIVE ancestors(node_id, parent_node_id, node_type, ref, depth) AS (
+              SELECT n.node_id, n.parent_node_id, n.node_type, n.ref, 0
+              FROM nodes n
+              WHERE n.node_id = ?1
+
+              UNION ALL
+
+              SELECT p.node_id, p.parent_node_id, p.node_type, p.ref, a.depth + 1
+              FROM nodes p
+              JOIN ancestors a ON p.node_id = a.parent_node_id
+              WHERE a.depth < 16
+            )
+            SELECT ref
+            FROM ancestors
+            WHERE depth > 0
+              AND ref IS NOT NULL
+              AND trim(ref) <> ''
+              AND node_type IN ('clause', 'subclause', 'annex', 'table')
+            ORDER BY depth ASC
             LIMIT 1
             ",
             [origin_node_id],
