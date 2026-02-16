@@ -9,7 +9,7 @@ use tracing::info;
 use crate::cli::ValidateArgs;
 use crate::util::{now_utc_string, write_json_pretty};
 
-const DB_SCHEMA_VERSION: &str = "0.1.0";
+const DB_SCHEMA_VERSION: &str = "0.3.0";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GoldSetManifest {
@@ -37,6 +37,12 @@ struct GoldReference {
     expected_min_cols: Option<usize>,
     #[serde(default)]
     expected_min_list_items: Option<usize>,
+    #[serde(default)]
+    expected_anchor_type: Option<String>,
+    #[serde(default)]
+    expected_marker_label: Option<String>,
+    #[serde(default)]
+    expected_paragraph_index: Option<usize>,
     status: String,
 }
 
@@ -246,7 +252,9 @@ fn evaluate_reference(
               text,
               origin_node_id,
               leaf_node_type,
-              ancestor_path
+              ancestor_path,
+              anchor_type,
+              anchor_label_norm
             FROM chunks
             WHERE doc_id = ?1 AND lower(ref) = lower(?2)
             ORDER BY page_pdf_start
@@ -263,6 +271,8 @@ fn evaluate_reference(
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
                 ))
             },
         )
@@ -280,7 +290,9 @@ fn evaluate_reference(
                   text,
                   origin_node_id,
                   leaf_node_type,
-                  ancestor_path
+                  ancestor_path,
+                  anchor_type,
+                  anchor_label_norm
                 FROM chunks
                 WHERE doc_id = ?1 AND lower(ref) LIKE '%' || lower(?2) || '%'
                 ORDER BY page_pdf_start
@@ -297,6 +309,8 @@ fn evaluate_reference(
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, Option<String>>(6)?,
                         row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
                     ))
                 },
             )
@@ -312,6 +326,8 @@ fn evaluate_reference(
         origin_node_id,
         leaf_node_type,
         ancestor_path,
+        anchor_type,
+        anchor_label_norm,
     )) = row
     else {
         return Ok(ReferenceEvaluation {
@@ -376,6 +392,8 @@ fn evaluate_reference(
         reference,
         leaf_node_type.as_deref(),
         parent_ref.as_deref(),
+        anchor_type.as_deref(),
+        anchor_label_norm.as_deref(),
         table_row_count,
         table_cell_count,
         list_item_count,
@@ -697,6 +715,8 @@ fn evaluate_hierarchy_expectations(
     reference: &GoldReference,
     leaf_node_type: Option<&str>,
     parent_ref: Option<&str>,
+    anchor_type: Option<&str>,
+    anchor_label_norm: Option<&str>,
     table_row_count: usize,
     table_cell_count: usize,
     list_item_count: usize,
@@ -728,7 +748,43 @@ fn evaluate_hierarchy_expectations(
         None => true,
     };
 
-    node_type_ok && parent_ref_ok && min_rows_ok && min_cols_ok && min_list_items_ok
+    let anchor_type_ok = match reference.expected_anchor_type.as_deref() {
+        Some(expected) => anchor_type
+            .map(|actual| actual.eq_ignore_ascii_case(expected))
+            .unwrap_or(false),
+        None => true,
+    };
+
+    let marker_label_ok = match reference.expected_marker_label.as_deref() {
+        Some(expected) => {
+            let expected_norm = normalize_anchor_label(expected);
+            anchor_label_norm
+                .map(normalize_anchor_label)
+                .map(|actual| actual.eq_ignore_ascii_case(&expected_norm))
+                .unwrap_or(false)
+        }
+        None => true,
+    };
+
+    let paragraph_index_ok = match reference.expected_paragraph_index {
+        Some(expected) => {
+            let paragraph_anchor = anchor_type
+                .map(|value| value.eq_ignore_ascii_case("paragraph"))
+                .unwrap_or(false);
+            let actual_index = anchor_label_norm.and_then(|value| value.parse::<usize>().ok());
+            paragraph_anchor && actual_index == Some(expected)
+        }
+        None => true,
+    };
+
+    node_type_ok
+        && parent_ref_ok
+        && min_rows_ok
+        && min_cols_ok
+        && min_list_items_ok
+        && anchor_type_ok
+        && marker_label_ok
+        && paragraph_index_ok
 }
 
 fn build_hierarchy_metrics(evals: &[ReferenceEvaluation]) -> HierarchyMetrics {
@@ -758,6 +814,18 @@ fn has_hierarchy_expectations(reference: &GoldReference) -> bool {
         || reference.expected_min_rows.is_some()
         || reference.expected_min_cols.is_some()
         || reference.expected_min_list_items.is_some()
+        || reference.expected_anchor_type.is_some()
+        || reference.expected_marker_label.is_some()
+        || reference.expected_paragraph_index.is_some()
+}
+
+fn normalize_anchor_label(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches([')', '.', ':', ';'])
+        .replace('–', "-")
+        .replace('—', "-")
+        .to_ascii_lowercase()
 }
 
 fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {

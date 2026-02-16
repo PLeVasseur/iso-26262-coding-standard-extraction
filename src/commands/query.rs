@@ -28,6 +28,11 @@ struct QueryCandidate {
     origin_node_id: Option<String>,
     leaf_node_type: Option<String>,
     ancestor_path: Option<String>,
+    anchor_type: Option<String>,
+    anchor_label_raw: Option<String>,
+    anchor_label_norm: Option<String>,
+    anchor_order: Option<i64>,
+    citation_anchor_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +68,11 @@ struct QueryResult {
     origin_node_id: Option<String>,
     leaf_node_type: Option<String>,
     ancestor_path: Option<String>,
+    anchor_type: Option<String>,
+    anchor_label_raw: Option<String>,
+    anchor_label_norm: Option<String>,
+    anchor_order: Option<i64>,
+    citation_anchor_id: Option<String>,
     ancestor_nodes: Option<Vec<String>>,
     descendants: Option<Vec<DescendantNode>>,
 }
@@ -216,7 +226,12 @@ fn query_exact_matches(
           substr(COALESCE(c.text, ''), 1, 420),
           c.origin_node_id,
           c.leaf_node_type,
-          c.ancestor_path
+          c.ancestor_path,
+          c.anchor_type,
+          c.anchor_label_raw,
+          c.anchor_label_norm,
+          c.anchor_order,
+          c.citation_anchor_id
         FROM chunks c
         JOIN docs d ON d.doc_id = c.doc_id
         WHERE
@@ -278,6 +293,11 @@ fn query_exact_matches(
             origin_node_id: row.get(11)?,
             leaf_node_type: row.get(12)?,
             ancestor_path: row.get(13)?,
+            anchor_type: row.get(14)?,
+            anchor_label_raw: row.get(15)?,
+            anchor_label_norm: row.get(16)?,
+            anchor_order: row.get(17)?,
+            citation_anchor_id: row.get(18)?,
         });
     }
 
@@ -310,7 +330,12 @@ fn query_fts_matches(
           bm25(chunks_fts),
           c.origin_node_id,
           c.leaf_node_type,
-          c.ancestor_path
+          c.ancestor_path,
+          c.anchor_type,
+          c.anchor_label_raw,
+          c.anchor_label_norm,
+          c.anchor_order,
+          c.citation_anchor_id
         FROM chunks_fts
         JOIN chunks c ON c.rowid = chunks_fts.rowid
         JOIN docs d ON d.doc_id = c.doc_id
@@ -354,6 +379,11 @@ fn query_fts_matches(
             origin_node_id: row.get(12)?,
             leaf_node_type: row.get(13)?,
             ancestor_path: row.get(14)?,
+            anchor_type: row.get(15)?,
+            anchor_label_raw: row.get(16)?,
+            anchor_label_norm: row.get(17)?,
+            anchor_order: row.get(18)?,
+            citation_anchor_id: row.get(19)?,
         });
         index += 1;
     }
@@ -382,7 +412,12 @@ fn query_node_matches(
           n.page_pdf_end,
           COALESCE(n.source_hash, ''),
           substr(COALESCE(n.text, ''), 1, 420),
-          n.ancestor_path
+          n.ancestor_path,
+          n.anchor_type,
+          n.anchor_label_raw,
+          n.anchor_label_norm,
+          n.anchor_order,
+          n.citation_anchor_id
         FROM nodes n
         JOIN docs d ON d.doc_id = n.doc_id
         WHERE
@@ -453,6 +488,11 @@ fn query_node_matches(
             origin_node_id: Some(node_id),
             leaf_node_type: Some(node_type),
             ancestor_path: row.get(11)?,
+            anchor_type: row.get(12)?,
+            anchor_label_raw: row.get(13)?,
+            anchor_label_norm: row.get(14)?,
+            anchor_order: row.get(15)?,
+            citation_anchor_id: row.get(16)?,
         });
     }
 
@@ -477,17 +517,7 @@ fn to_results(
     let mut out = Vec::with_capacity(candidates.len());
 
     for (index, candidate) in candidates.into_iter().enumerate() {
-        let citation = format!(
-            "ISO 26262-{}:{}, {}, PDF pages {}",
-            candidate.part,
-            candidate.year,
-            if candidate.reference.is_empty() {
-                "(unreferenced chunk)".to_string()
-            } else {
-                candidate.reference.clone()
-            },
-            format_page_range(candidate.page_pdf_start, candidate.page_pdf_end)
-        );
+        let citation = render_citation(&candidate);
 
         let ancestor_nodes = if with_ancestors {
             candidate
@@ -527,6 +557,11 @@ fn to_results(
             origin_node_id: candidate.origin_node_id,
             leaf_node_type: candidate.leaf_node_type,
             ancestor_path: candidate.ancestor_path,
+            anchor_type: candidate.anchor_type,
+            anchor_label_raw: candidate.anchor_label_raw,
+            anchor_label_norm: candidate.anchor_label_norm,
+            anchor_order: candidate.anchor_order,
+            citation_anchor_id: candidate.citation_anchor_id,
             ancestor_nodes,
             descendants,
         });
@@ -594,6 +629,21 @@ fn write_text_response(query_text: &str, results: &[QueryResult]) -> Result<()> 
         }
         if let Some(leaf_node_type) = &result.leaf_node_type {
             writeln!(output, "\tleaf_node_type: {leaf_node_type}")?;
+        }
+        if let Some(anchor_type) = &result.anchor_type {
+            writeln!(output, "\tanchor_type: {anchor_type}")?;
+        }
+        if let Some(anchor_label_raw) = &result.anchor_label_raw {
+            writeln!(output, "\tanchor_label_raw: {anchor_label_raw}")?;
+        }
+        if let Some(anchor_label_norm) = &result.anchor_label_norm {
+            writeln!(output, "\tanchor_label_norm: {anchor_label_norm}")?;
+        }
+        if let Some(anchor_order) = result.anchor_order {
+            writeln!(output, "\tanchor_order: {anchor_order}")?;
+        }
+        if let Some(citation_anchor_id) = &result.citation_anchor_id {
+            writeln!(output, "\tcitation_anchor_id: {citation_anchor_id}")?;
         }
         writeln!(output, "\tcitation: {}", result.citation)?;
         writeln!(output, "\tsnippet: {}", result.snippet)?;
@@ -696,6 +746,57 @@ fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
         (None, Some(end)) => end.to_string(),
         (None, None) => "unknown".to_string(),
     }
+}
+
+fn render_citation(candidate: &QueryCandidate) -> String {
+    let reference = if candidate.reference.is_empty() {
+        "(unreferenced chunk)".to_string()
+    } else {
+        candidate.reference.clone()
+    };
+
+    let reference_with_anchor = match (
+        candidate.anchor_type.as_deref(),
+        candidate.anchor_label_norm.as_deref(),
+    ) {
+        (Some("marker"), Some(label)) if !label.is_empty() => {
+            let base = marker_base_reference(&reference);
+            if label.starts_with("NOTE") {
+                format!("{base}, {label}")
+            } else {
+                format!("{base}({label})")
+            }
+        }
+        (Some("paragraph"), Some(label)) if !label.is_empty() => {
+            let base = marker_base_reference(&reference);
+            format!("{base}, para {label}")
+        }
+        _ => reference,
+    };
+
+    format!(
+        "ISO 26262-{}:{}, {}, PDF pages {}",
+        candidate.part,
+        candidate.year,
+        reference_with_anchor,
+        format_page_range(candidate.page_pdf_start, candidate.page_pdf_end)
+    )
+}
+
+fn marker_base_reference(reference: &str) -> String {
+    if let Some((base, _)) = reference.split_once(" item ") {
+        return base.to_string();
+    }
+
+    if let Some((base, _)) = reference.split_once(" para ") {
+        return base.to_string();
+    }
+
+    if let Some((base, _)) = reference.split_once(" row ") {
+        return base.to_string();
+    }
+
+    reference.to_string()
 }
 
 fn condense_whitespace(input: &str) -> String {

@@ -68,6 +68,7 @@ pub struct IngestCounts {
     pub table_cell_nodes_inserted: usize,
     pub list_nodes_inserted: usize,
     pub list_item_nodes_inserted: usize,
+    pub paragraph_nodes_inserted: usize,
     pub requirement_atom_nodes_inserted: usize,
     pub table_raw_fallback_count: usize,
     pub list_parse_fallback_count: usize,
@@ -93,4 +94,14 @@ pub struct IngestRunManifest {
     pub source_hashes: Vec<PdfEntry>,
     pub warnings: Vec<String>,
     pub notes: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CitationAnchorFields {
+    pub anchor_type: Option<String>,
+    pub anchor_label_raw: Option<String>,
+    pub anchor_label_norm: Option<String>,
+    pub anchor_order: Option<i64>,
+    pub citation_anchor_id: Option<String>,
 }
