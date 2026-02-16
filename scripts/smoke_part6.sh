@@ -5,6 +5,7 @@ CACHE_ROOT="${CACHE_ROOT:-.cache/iso26262}"
 PART="${PART:-6}"
 MAX_PAGES="${MAX_PAGES:-60}"
 SMOKE_IDEMPOTENCE="${SMOKE_IDEMPOTENCE:-0}"
+SMOKE_DETERMINISM="${SMOKE_DETERMINISM:-0}"
 
 log() {
   printf '[smoke] %s\n' "$*"
@@ -81,6 +82,24 @@ run_query_json() {
     "$@"
 }
 
+normalize_quality_report() {
+  local report_path="$1"
+
+  jq -c '{
+    status,
+    summary,
+    hierarchy_metrics,
+    table_quality_scorecard: {
+      counters: .table_quality_scorecard.counters,
+      table_sparse_row_ratio: .table_quality_scorecard.table_sparse_row_ratio,
+      table_overloaded_row_ratio: .table_quality_scorecard.table_overloaded_row_ratio,
+      table_marker_sequence_coverage: .table_quality_scorecard.table_marker_sequence_coverage,
+      table_description_coverage: .table_quality_scorecard.table_description_coverage
+    },
+    checks
+  }' "$report_path"
+}
+
 require_cmd cargo
 require_cmd jq
 
@@ -105,10 +124,14 @@ log "Using ingest manifest: ${LATEST_INGEST_PATH}"
 log "Validating quality report"
 assert_jq_file "$REPORT_PATH" '.status == "passed"' 'quality report status is passed'
 assert_jq_file "$REPORT_PATH" '.summary.failed == 0 and .summary.pending == 0' 'quality summary has no failed or pending checks'
+assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-010").result) == "pass"' 'Q-010 hierarchy expectations pass'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-011").result) == "pass"' 'Q-011 table sparse-row ratio passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-012").result) == "pass"' 'Q-012 table overloaded-row ratio passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-013").result) == "pass"' 'Q-013 table marker-sequence coverage passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-014").result) == "pass"' 'Q-014 table description coverage passes'
+assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-015").result) == "pass"' 'Q-015 marker extraction coverage passes'
+assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-016").result) == "pass"' 'Q-016 marker citation accuracy passes'
+assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-017").result) == "pass"' 'Q-017 paragraph citation accuracy passes'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_sparse_row_ratio <= 0.20' 'table sparse-row ratio is within threshold'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_overloaded_row_ratio <= 0.10' 'table overloaded-row ratio is within threshold'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_marker_sequence_coverage >= 0.90' 'table marker-sequence coverage meets threshold'
@@ -141,6 +164,68 @@ assert_jq_json "$TABLE_CELL_JSON" '.returned >= 1 and .results[0].leaf_node_type
 
 REQ_ATOM_JSON="$(run_query_json "$BIN_PATH" "software unit design" --node-type requirement_atom)"
 assert_jq_json "$REQ_ATOM_JSON" '.returned >= 1 and .results[0].leaf_node_type == "requirement_atom" and (.results[0].reference | contains("req"))' 'requirement_atom sample query succeeds'
+
+if [[ "$SMOKE_DETERMINISM" == "1" ]]; then
+  log "Running optional validate/query determinism check"
+
+  baseline_report="$(normalize_quality_report "$REPORT_PATH")"
+  baseline_marker_query="$(run_query_json "$BIN_PATH" "8.4.5 item 1" --node-type list_item | jq -c '.results[0] | {
+    reference,
+    citation,
+    anchor_type,
+    anchor_label_norm,
+    page_pdf_start,
+    page_pdf_end,
+    source_hash,
+    citation_anchor_id
+  }')"
+  baseline_paragraph_query="$(run_query_json "$BIN_PATH" "9.1 para 3" --node-type paragraph | jq -c '.results[0] | {
+    reference,
+    citation,
+    anchor_type,
+    anchor_label_norm,
+    page_pdf_start,
+    page_pdf_end,
+    source_hash,
+    citation_anchor_id
+  }')"
+
+  "$BIN_PATH" validate --cache-root "$CACHE_ROOT"
+
+  current_report="$(normalize_quality_report "$REPORT_PATH")"
+  current_marker_query="$(run_query_json "$BIN_PATH" "8.4.5 item 1" --node-type list_item | jq -c '.results[0] | {
+    reference,
+    citation,
+    anchor_type,
+    anchor_label_norm,
+    page_pdf_start,
+    page_pdf_end,
+    source_hash,
+    citation_anchor_id
+  }')"
+  current_paragraph_query="$(run_query_json "$BIN_PATH" "9.1 para 3" --node-type paragraph | jq -c '.results[0] | {
+    reference,
+    citation,
+    anchor_type,
+    anchor_label_norm,
+    page_pdf_start,
+    page_pdf_end,
+    source_hash,
+    citation_anchor_id
+  }')"
+
+  if [[ "$baseline_report" != "$current_report" ]]; then
+    fail "quality report core fields changed between consecutive validate runs"
+  fi
+  if [[ "$baseline_marker_query" != "$current_marker_query" ]]; then
+    fail "marker query output changed between consecutive validate runs"
+  fi
+  if [[ "$baseline_paragraph_query" != "$current_paragraph_query" ]]; then
+    fail "paragraph query output changed between consecutive validate runs"
+  fi
+
+  log "PASS: validate/query outputs are deterministic across consecutive validate runs"
+fi
 
 if [[ "$SMOKE_IDEMPOTENCE" == "1" ]]; then
   log "Running optional idempotence check"
