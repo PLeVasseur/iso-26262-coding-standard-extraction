@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -48,6 +49,7 @@ struct GoldReference {
 
 #[derive(Debug)]
 struct ReferenceEvaluation {
+    skipped: bool,
     found: bool,
     chunk_type: Option<String>,
     page_start: Option<i64>,
@@ -128,8 +130,16 @@ pub fn run(args: ValidateArgs) -> Result<()> {
     )
     .with_context(|| format!("failed to open database read-only: {}", db_path.display()))?;
 
+    let evaluable_doc_ids = collect_evaluable_doc_ids(&connection)?;
+
     let mut evaluations = Vec::with_capacity(gold_manifest.gold_references.len());
     for reference in &mut gold_manifest.gold_references {
+        if !evaluable_doc_ids.contains(&reference.doc_id) {
+            reference.status = "skip".to_string();
+            evaluations.push(skipped_reference_evaluation());
+            continue;
+        }
+
         let evaluation = evaluate_reference(&connection, reference)?;
         let hierarchy_required = has_hierarchy_expectations(reference);
         let hierarchy_ok = !hierarchy_required || evaluation.hierarchy_ok;
@@ -237,6 +247,40 @@ fn resolve_run_id(manifest_dir: &Path, fallback: &str) -> String {
     parsed.unwrap_or_else(|| fallback.to_string())
 }
 
+fn collect_evaluable_doc_ids(connection: &Connection) -> Result<HashSet<String>> {
+    let mut statement = connection.prepare("SELECT DISTINCT doc_id FROM chunks")?;
+    let mut rows = statement.query([])?;
+
+    let mut doc_ids = HashSet::<String>::new();
+    while let Some(row) = rows.next()? {
+        let doc_id: String = row.get(0)?;
+        if !doc_id.trim().is_empty() {
+            doc_ids.insert(doc_id);
+        }
+    }
+
+    Ok(doc_ids)
+}
+
+fn skipped_reference_evaluation() -> ReferenceEvaluation {
+    ReferenceEvaluation {
+        skipped: true,
+        found: false,
+        chunk_type: None,
+        page_start: None,
+        page_end: None,
+        source_hash: None,
+        has_all_terms: false,
+        has_any_term: false,
+        table_row_count: 0,
+        table_cell_count: 0,
+        list_item_count: 0,
+        lineage_complete: false,
+        hierarchy_ok: false,
+        page_pattern_match: None,
+    }
+}
+
 fn evaluate_reference(
     connection: &Connection,
     reference: &GoldReference,
@@ -331,6 +375,7 @@ fn evaluate_reference(
     )) = row
     else {
         return Ok(ReferenceEvaluation {
+            skipped: false,
             found: false,
             chunk_type: None,
             page_start: None,
@@ -400,6 +445,7 @@ fn evaluate_reference(
     );
 
     Ok(ReferenceEvaluation {
+        skipped: false,
         found: true,
         chunk_type: Some(chunk_type),
         page_start,
@@ -421,25 +467,30 @@ fn build_quality_checks(
     refs: &[GoldReference],
     evals: &[ReferenceEvaluation],
 ) -> Result<Vec<QualityCheck>> {
-    let total = refs.len();
-    let found = evals.iter().filter(|eval| eval.found).count();
-
-    let page_pattern_expected = evals
-        .iter()
-        .filter(|eval| eval.page_pattern_match.is_some())
-        .count();
-    let page_pattern_ok = evals
-        .iter()
-        .filter(|eval| eval.page_pattern_match == Some(true))
-        .count();
-
-    let table_total = refs
-        .iter()
-        .filter(|reference| reference.reference.starts_with("Table "))
-        .count();
-    let table_ok = refs
+    let evaluable = refs
         .iter()
         .zip(evals.iter())
+        .filter(|(_, eval)| !eval.skipped)
+        .collect::<Vec<(&GoldReference, &ReferenceEvaluation)>>();
+
+    let total = evaluable.len();
+    let found = evaluable.iter().filter(|(_, eval)| eval.found).count();
+
+    let page_pattern_expected = evaluable
+        .iter()
+        .filter(|(_, eval)| eval.page_pattern_match.is_some())
+        .count();
+    let page_pattern_ok = evaluable
+        .iter()
+        .filter(|(_, eval)| eval.page_pattern_match == Some(true))
+        .count();
+
+    let table_total = evaluable
+        .iter()
+        .filter(|(reference, _)| reference.reference.starts_with("Table "))
+        .count();
+    let table_ok = evaluable
+        .iter()
         .filter(|(reference, eval)| {
             reference.reference.starts_with("Table ")
                 && eval.chunk_type.as_deref() == Some("table")
@@ -453,8 +504,8 @@ fn build_quality_checks(
         |row| row.get(0),
     )?;
 
-    let exact_ref_total = refs.len();
-    let exact_ref_hits = refs
+    let exact_ref_total = evaluable.len();
+    let exact_ref_hits = evaluable
         .iter()
         .filter(|reference| {
             connection
@@ -465,26 +516,25 @@ fn build_quality_checks(
                     WHERE doc_id = ?1 AND lower(ref) = lower(?2)
                     LIMIT 1
                     ",
-                    params![reference.doc_id, reference.reference],
+                    params![reference.0.doc_id, reference.0.reference],
                     |_| Ok(1_i64),
                 )
                 .is_ok()
         })
         .count();
 
-    let keyword_total = refs
+    let keyword_total = evaluable
         .iter()
-        .filter(|reference| !reference.must_match_terms.is_empty())
+        .filter(|(reference, _)| !reference.must_match_terms.is_empty())
         .count();
-    let keyword_ok = refs
+    let keyword_ok = evaluable
         .iter()
-        .zip(evals.iter())
         .filter(|(reference, eval)| !reference.must_match_terms.is_empty() && eval.has_any_term)
         .count();
 
-    let citation_ok = evals
+    let citation_ok = evaluable
         .iter()
-        .filter(|eval| {
+        .filter(|(_, eval)| {
             eval.found
                 && eval.page_start.is_some()
                 && eval.page_end.is_some()
@@ -508,7 +558,14 @@ fn build_quality_checks(
     checks.push(QualityCheck {
         check_id: "Q-001".to_string(),
         name: "Gold references retrievable".to_string(),
-        result: if found == total { "pass" } else { "failed" }.to_string(),
+        result: if total == 0 {
+            "pending"
+        } else if found == total {
+            "pass"
+        } else {
+            "failed"
+        }
+        .to_string(),
     });
     checks.push(QualityCheck {
         check_id: "Q-002".to_string(),
@@ -547,7 +604,9 @@ fn build_quality_checks(
     checks.push(QualityCheck {
         check_id: "Q-005".to_string(),
         name: "Exact reference query ranking".to_string(),
-        result: if exact_ref_hits == exact_ref_total {
+        result: if exact_ref_total == 0 {
+            "pending"
+        } else if exact_ref_hits == exact_ref_total {
             "pass"
         } else {
             "failed"
@@ -587,10 +646,10 @@ fn build_quality_checks(
         .to_string(),
     });
 
-    let lineage_ok = evals
+    let lineage_ok = evaluable
         .iter()
-        .filter(|eval| eval.found)
-        .all(|eval| eval.lineage_complete);
+        .filter(|(_, eval)| eval.found)
+        .all(|(_, eval)| eval.lineage_complete);
     checks.push(QualityCheck {
         check_id: "Q-009".to_string(),
         name: "Chunk lineage fields populated".to_string(),
@@ -604,13 +663,12 @@ fn build_quality_checks(
         .to_string(),
     });
 
-    let hierarchy_expected_total = refs
+    let hierarchy_expected_total = evaluable
         .iter()
-        .filter(|reference| has_hierarchy_expectations(reference))
+        .filter(|(reference, _)| has_hierarchy_expectations(reference))
         .count();
-    let hierarchy_expected_ok = refs
+    let hierarchy_expected_ok = evaluable
         .iter()
-        .zip(evals.iter())
         .filter(|(reference, eval)| has_hierarchy_expectations(reference) && eval.hierarchy_ok)
         .count();
     checks.push(QualityCheck {
