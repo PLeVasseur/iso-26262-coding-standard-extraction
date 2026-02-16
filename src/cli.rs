@@ -87,6 +87,15 @@ pub struct QueryArgs {
     #[arg(long = "type")]
     pub chunk_type: Option<String>,
 
+    #[arg(long)]
+    pub node_type: Option<String>,
+
+    #[arg(long, default_value_t = false)]
+    pub with_ancestors: bool,
+
+    #[arg(long, default_value_t = false)]
+    pub with_descendants: bool,
+
     #[arg(long, default_value_t = false)]
     pub json: bool,
 }

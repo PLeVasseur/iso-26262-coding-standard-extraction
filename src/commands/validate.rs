@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -27,6 +27,16 @@ struct GoldReference {
     reference: String,
     expected_page_pattern: String,
     must_match_terms: Vec<String>,
+    #[serde(default)]
+    expected_node_type: Option<String>,
+    #[serde(default)]
+    expected_parent_ref: Option<String>,
+    #[serde(default)]
+    expected_min_rows: Option<usize>,
+    #[serde(default)]
+    expected_min_cols: Option<usize>,
+    #[serde(default)]
+    expected_min_list_items: Option<usize>,
     status: String,
 }
 
@@ -39,7 +49,20 @@ struct ReferenceEvaluation {
     source_hash: Option<String>,
     has_all_terms: bool,
     has_any_term: bool,
+    table_row_count: usize,
+    table_cell_count: usize,
+    list_item_count: usize,
+    lineage_complete: bool,
+    hierarchy_ok: bool,
     page_pattern_match: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct HierarchyMetrics {
+    references_with_lineage: usize,
+    table_references_with_rows: usize,
+    table_references_with_cells: usize,
+    references_with_list_items: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +72,7 @@ struct QualityReport {
     generated_at: String,
     status: String,
     summary: QualitySummary,
+    hierarchy_metrics: HierarchyMetrics,
     checks: Vec<QualityCheck>,
     issues: Vec<String>,
     recommendations: Vec<String>,
@@ -101,7 +125,9 @@ pub fn run(args: ValidateArgs) -> Result<()> {
     let mut evaluations = Vec::with_capacity(gold_manifest.gold_references.len());
     for reference in &mut gold_manifest.gold_references {
         let evaluation = evaluate_reference(&connection, reference)?;
-        reference.status = if evaluation.found && evaluation.has_all_terms {
+        let hierarchy_required = has_hierarchy_expectations(reference);
+        let hierarchy_ok = !hierarchy_required || evaluation.hierarchy_ok;
+        reference.status = if evaluation.found && evaluation.has_all_terms && hierarchy_ok {
             "pass".to_string()
         } else {
             "fail".to_string()
@@ -113,6 +139,7 @@ pub fn run(args: ValidateArgs) -> Result<()> {
 
     let checks = build_quality_checks(&connection, &gold_manifest.gold_references, &evaluations)?;
     let summary = summarize_checks(&checks);
+    let hierarchy_metrics = build_hierarchy_metrics(&evaluations);
 
     let issues = checks
         .iter()
@@ -139,6 +166,24 @@ pub fn run(args: ValidateArgs) -> Result<()> {
                 .to_string(),
         );
     }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-003" && check.result == "failed")
+    {
+        recommendations.push(
+            "Improve structured table extraction to populate table_row/table_cell descendants for key references."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-007" && check.result == "failed")
+    {
+        recommendations.push(
+            "Ensure chunk lineage columns (origin_node_id, leaf_node_type, ancestor_path) are populated on ingest."
+                .to_string(),
+        );
+    }
 
     let report = QualityReport {
         manifest_version: 1,
@@ -152,6 +197,7 @@ pub fn run(args: ValidateArgs) -> Result<()> {
             "passed".to_string()
         },
         summary,
+        hierarchy_metrics,
         checks,
         issues,
         recommendations,
@@ -192,7 +238,15 @@ fn evaluate_reference(
     let mut row = connection
         .query_row(
             "
-            SELECT type, page_pdf_start, page_pdf_end, source_hash, text
+            SELECT
+              type,
+              page_pdf_start,
+              page_pdf_end,
+              source_hash,
+              text,
+              origin_node_id,
+              leaf_node_type,
+              ancestor_path
             FROM chunks
             WHERE doc_id = ?1 AND lower(ref) = lower(?2)
             ORDER BY page_pdf_start
@@ -206,6 +260,9 @@ fn evaluate_reference(
                     row.get::<_, Option<i64>>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             },
         )
@@ -215,7 +272,15 @@ fn evaluate_reference(
         row = connection
             .query_row(
                 "
-                SELECT type, page_pdf_start, page_pdf_end, source_hash, text
+                SELECT
+                  type,
+                  page_pdf_start,
+                  page_pdf_end,
+                  source_hash,
+                  text,
+                  origin_node_id,
+                  leaf_node_type,
+                  ancestor_path
                 FROM chunks
                 WHERE doc_id = ?1 AND lower(ref) LIKE '%' || lower(?2) || '%'
                 ORDER BY page_pdf_start
@@ -229,13 +294,26 @@ fn evaluate_reference(
                         row.get::<_, Option<i64>>(2)?,
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
             .ok();
     }
 
-    let Some((chunk_type, page_start, page_end, source_hash, text)) = row else {
+    let Some((
+        chunk_type,
+        page_start,
+        page_end,
+        source_hash,
+        text,
+        origin_node_id,
+        leaf_node_type,
+        ancestor_path,
+    )) = row
+    else {
         return Ok(ReferenceEvaluation {
             found: false,
             chunk_type: None,
@@ -244,6 +322,11 @@ fn evaluate_reference(
             source_hash: None,
             has_all_terms: false,
             has_any_term: false,
+            table_row_count: 0,
+            table_cell_count: 0,
+            list_item_count: 0,
+            lineage_complete: false,
+            hierarchy_ok: false,
             page_pattern_match: None,
         });
     };
@@ -275,6 +358,29 @@ fn evaluate_reference(
         Some(page_text == reference.expected_page_pattern)
     };
 
+    let (parent_ref, table_row_count, table_cell_count, list_item_count) =
+        if let Some(origin_node_id_value) = origin_node_id.as_deref() {
+            collect_hierarchy_stats(connection, origin_node_id_value)?
+        } else {
+            (None, 0, 0, 0)
+        };
+
+    let lineage_complete = origin_node_id.is_some()
+        && leaf_node_type.is_some()
+        && ancestor_path
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+
+    let hierarchy_ok = evaluate_hierarchy_expectations(
+        reference,
+        leaf_node_type.as_deref(),
+        parent_ref.as_deref(),
+        table_row_count,
+        table_cell_count,
+        list_item_count,
+    );
+
     Ok(ReferenceEvaluation {
         found: true,
         chunk_type: Some(chunk_type),
@@ -283,6 +389,11 @@ fn evaluate_reference(
         source_hash,
         has_all_terms,
         has_any_term,
+        table_row_count,
+        table_cell_count,
+        list_item_count,
+        lineage_complete,
+        hierarchy_ok,
         page_pattern_match,
     })
 }
@@ -362,7 +473,8 @@ fn build_quality_checks(
                 && eval
                     .source_hash
                     .as_deref()
-                    .is_some_and(|value| !value.is_empty())
+                    .map(|value| !value.is_empty())
+                    .unwrap_or(false)
         })
         .count();
 
@@ -457,6 +569,45 @@ fn build_quality_checks(
         .to_string(),
     });
 
+    let lineage_ok = evals
+        .iter()
+        .filter(|eval| eval.found)
+        .all(|eval| eval.lineage_complete);
+    checks.push(QualityCheck {
+        check_id: "Q-009".to_string(),
+        name: "Chunk lineage fields populated".to_string(),
+        result: if found == 0 {
+            "pending"
+        } else if lineage_ok {
+            "pass"
+        } else {
+            "failed"
+        }
+        .to_string(),
+    });
+
+    let hierarchy_expected_total = refs
+        .iter()
+        .filter(|reference| has_hierarchy_expectations(reference))
+        .count();
+    let hierarchy_expected_ok = refs
+        .iter()
+        .zip(evals.iter())
+        .filter(|(reference, eval)| has_hierarchy_expectations(reference) && eval.hierarchy_ok)
+        .count();
+    checks.push(QualityCheck {
+        check_id: "Q-010".to_string(),
+        name: "Hierarchy expectations satisfied".to_string(),
+        result: if hierarchy_expected_total == 0 {
+            "pending"
+        } else if hierarchy_expected_ok == hierarchy_expected_total {
+            "pass"
+        } else {
+            "failed"
+        }
+        .to_string(),
+    });
+
     Ok(checks)
 }
 
@@ -477,6 +628,136 @@ fn summarize_checks(checks: &[QualityCheck]) -> QualitySummary {
         failed,
         pending,
     }
+}
+
+fn collect_hierarchy_stats(
+    connection: &Connection,
+    origin_node_id: &str,
+) -> Result<(Option<String>, usize, usize, usize)> {
+    let parent_ref = connection
+        .query_row(
+            "
+            SELECT p.ref
+            FROM nodes n
+            LEFT JOIN nodes p ON p.node_id = n.parent_node_id
+            WHERE n.node_id = ?1
+            LIMIT 1
+            ",
+            [origin_node_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten();
+
+    let mut statement = connection.prepare(
+        "
+        WITH RECURSIVE descendants(node_id, node_type, depth) AS (
+          SELECT n.node_id, n.node_type, 1
+          FROM nodes n
+          WHERE n.parent_node_id = ?1
+
+          UNION ALL
+
+          SELECT n.node_id, n.node_type, d.depth + 1
+          FROM nodes n
+          JOIN descendants d ON n.parent_node_id = d.node_id
+          WHERE d.depth < 8
+        )
+        SELECT node_type, COUNT(*)
+        FROM descendants
+        GROUP BY node_type
+        ",
+    )?;
+
+    let mut rows = statement.query([origin_node_id])?;
+    let mut table_row_count = 0usize;
+    let mut table_cell_count = 0usize;
+    let mut list_item_count = 0usize;
+
+    while let Some(row) = rows.next()? {
+        let node_type: String = row.get(0)?;
+        let count = row.get::<_, i64>(1)? as usize;
+        match node_type.as_str() {
+            "table_row" => table_row_count = count,
+            "table_cell" => table_cell_count = count,
+            "list_item" => list_item_count = count,
+            _ => {}
+        }
+    }
+
+    Ok((
+        parent_ref,
+        table_row_count,
+        table_cell_count,
+        list_item_count,
+    ))
+}
+
+fn evaluate_hierarchy_expectations(
+    reference: &GoldReference,
+    leaf_node_type: Option<&str>,
+    parent_ref: Option<&str>,
+    table_row_count: usize,
+    table_cell_count: usize,
+    list_item_count: usize,
+) -> bool {
+    let node_type_ok = match reference.expected_node_type.as_deref() {
+        Some(expected) => leaf_node_type
+            .map(|actual| actual.eq_ignore_ascii_case(expected))
+            .unwrap_or(false),
+        None => true,
+    };
+
+    let parent_ref_ok = match reference.expected_parent_ref.as_deref() {
+        Some(expected) => parent_ref
+            .map(|actual| actual.eq_ignore_ascii_case(expected))
+            .unwrap_or(false),
+        None => true,
+    };
+
+    let min_rows_ok = match reference.expected_min_rows {
+        Some(expected) => table_row_count >= expected,
+        None => true,
+    };
+    let min_cols_ok = match reference.expected_min_cols {
+        Some(expected) => table_cell_count >= expected,
+        None => true,
+    };
+    let min_list_items_ok = match reference.expected_min_list_items {
+        Some(expected) => list_item_count >= expected,
+        None => true,
+    };
+
+    node_type_ok && parent_ref_ok && min_rows_ok && min_cols_ok && min_list_items_ok
+}
+
+fn build_hierarchy_metrics(evals: &[ReferenceEvaluation]) -> HierarchyMetrics {
+    HierarchyMetrics {
+        references_with_lineage: evals
+            .iter()
+            .filter(|eval| eval.found && eval.lineage_complete)
+            .count(),
+        table_references_with_rows: evals
+            .iter()
+            .filter(|eval| eval.found && eval.table_row_count > 0)
+            .count(),
+        table_references_with_cells: evals
+            .iter()
+            .filter(|eval| eval.found && eval.table_cell_count > 0)
+            .count(),
+        references_with_list_items: evals
+            .iter()
+            .filter(|eval| eval.found && eval.list_item_count > 0)
+            .count(),
+    }
+}
+
+fn has_hierarchy_expectations(reference: &GoldReference) -> bool {
+    reference.expected_node_type.is_some()
+        || reference.expected_parent_ref.is_some()
+        || reference.expected_min_rows.is_some()
+        || reference.expected_min_cols.is_some()
+        || reference.expected_min_list_items.is_some()
 }
 
 fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {

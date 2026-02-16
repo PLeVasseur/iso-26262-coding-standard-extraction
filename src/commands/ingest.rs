@@ -16,7 +16,7 @@ use crate::model::{
 };
 use crate::util::{ensure_directory, now_utc_string, utc_compact_string, write_json_pretty};
 
-const DB_SCHEMA_VERSION: &str = "0.1.0";
+const DB_SCHEMA_VERSION: &str = "0.2.0";
 
 pub fn run(args: IngestArgs) -> Result<()> {
     let started_ts = Utc::now();
@@ -100,12 +100,24 @@ pub fn run(args: IngestArgs) -> Result<()> {
             processed_pdf_count: chunk_stats.processed_pdf_count,
             docs_upserted,
             docs_total,
+            nodes_total: chunk_stats.nodes_total,
             chunks_total,
             structured_chunks_inserted: chunk_stats.structured_chunks_inserted,
             clause_chunks_inserted: chunk_stats.clause_chunks_inserted,
             table_chunks_inserted: chunk_stats.table_chunks_inserted,
             annex_chunks_inserted: chunk_stats.annex_chunks_inserted,
             page_chunks_inserted: chunk_stats.page_chunks_inserted,
+            clause_nodes_inserted: chunk_stats.clause_nodes_inserted,
+            subclause_nodes_inserted: chunk_stats.subclause_nodes_inserted,
+            annex_nodes_inserted: chunk_stats.annex_nodes_inserted,
+            table_nodes_inserted: chunk_stats.table_nodes_inserted,
+            table_row_nodes_inserted: chunk_stats.table_row_nodes_inserted,
+            table_cell_nodes_inserted: chunk_stats.table_cell_nodes_inserted,
+            list_nodes_inserted: chunk_stats.list_nodes_inserted,
+            list_item_nodes_inserted: chunk_stats.list_item_nodes_inserted,
+            requirement_atom_nodes_inserted: chunk_stats.requirement_atom_nodes_inserted,
+            table_raw_fallback_count: chunk_stats.table_raw_fallback_count,
+            list_parse_fallback_count: chunk_stats.list_parse_fallback_count,
             ocr_page_count: 0,
         },
         source_hashes: inventory.pdfs,
@@ -182,6 +194,24 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
           title TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS nodes (
+          node_id TEXT PRIMARY KEY,
+          parent_node_id TEXT,
+          doc_id TEXT NOT NULL,
+          node_type TEXT NOT NULL,
+          ref TEXT,
+          ref_path TEXT,
+          heading TEXT,
+          order_index INTEGER DEFAULT 0,
+          page_pdf_start INTEGER,
+          page_pdf_end INTEGER,
+          text TEXT,
+          source_hash TEXT,
+          ancestor_path TEXT,
+          FOREIGN KEY(doc_id) REFERENCES docs(doc_id),
+          FOREIGN KEY(parent_node_id) REFERENCES nodes(node_id)
+        );
+
         CREATE TABLE IF NOT EXISTS chunks (
           chunk_id TEXT PRIMARY KEY,
           doc_id TEXT NOT NULL,
@@ -198,10 +228,18 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
           table_md TEXT,
           table_csv TEXT,
           source_hash TEXT,
+          origin_node_id TEXT,
+          leaf_node_type TEXT,
+          ancestor_path TEXT,
           FOREIGN KEY(doc_id) REFERENCES docs(doc_id)
         );
         ",
     )?;
+
+    ensure_column_exists(connection, "nodes", "ancestor_path TEXT")?;
+    ensure_column_exists(connection, "chunks", "origin_node_id TEXT")?;
+    ensure_column_exists(connection, "chunks", "leaf_node_type TEXT")?;
+    ensure_column_exists(connection, "chunks", "ancestor_path TEXT")?;
 
     connection
         .execute(
@@ -212,6 +250,14 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
             [],
         )
         .context("failed to initialize FTS5 table chunks_fts")?;
+
+    connection.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_node_id);
+        CREATE INDEX IF NOT EXISTS idx_nodes_doc_type ON nodes(doc_id, node_type);
+        CREATE INDEX IF NOT EXISTS idx_chunks_origin_node ON chunks(origin_node_id);
+        ",
+    )?;
 
     let now = now_utc_string();
     connection.execute(
@@ -224,6 +270,36 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         [now],
     )?;
+
+    Ok(())
+}
+
+fn ensure_column_exists(
+    connection: &Connection,
+    table_name: &str,
+    column_definition: &str,
+) -> Result<()> {
+    let Some(column_name) = column_definition.split_whitespace().next() else {
+        bail!("invalid column definition: {column_definition}");
+    };
+
+    let pragma_sql = format!("PRAGMA table_info({table_name})");
+    let mut statement = connection
+        .prepare(&pragma_sql)
+        .with_context(|| format!("failed to inspect schema for table {table_name}"))?;
+
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let existing_name: String = row.get(1)?;
+        if existing_name == column_name {
+            return Ok(());
+        }
+    }
+
+    let alter_sql = format!("ALTER TABLE {table_name} ADD COLUMN {column_definition}");
+    connection
+        .execute(&alter_sql, [])
+        .with_context(|| format!("failed to add column {column_name} on {table_name}"))?;
 
     Ok(())
 }
@@ -272,6 +348,18 @@ struct ChunkInsertStats {
     table_chunks_inserted: usize,
     annex_chunks_inserted: usize,
     page_chunks_inserted: usize,
+    nodes_total: i64,
+    clause_nodes_inserted: usize,
+    subclause_nodes_inserted: usize,
+    annex_nodes_inserted: usize,
+    table_nodes_inserted: usize,
+    table_row_nodes_inserted: usize,
+    table_cell_nodes_inserted: usize,
+    list_nodes_inserted: usize,
+    list_item_nodes_inserted: usize,
+    requirement_atom_nodes_inserted: usize,
+    table_raw_fallback_count: usize,
+    list_parse_fallback_count: usize,
     warnings: Vec<String>,
 }
 
@@ -279,13 +367,14 @@ struct ChunkInsertStats {
 struct StructuredChunkDraft {
     chunk_type: ChunkType,
     reference: String,
+    ref_path: String,
     heading: String,
     text: String,
     page_start: i64,
     page_end: i64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChunkType {
     Clause,
     Table,
@@ -300,6 +389,54 @@ impl ChunkType {
             ChunkType::Annex => "annex",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeType {
+    Document,
+    Clause,
+    Subclause,
+    Annex,
+    Table,
+    TableRow,
+    TableCell,
+    List,
+    ListItem,
+    RequirementAtom,
+    Page,
+}
+
+impl NodeType {
+    fn as_str(self) -> &'static str {
+        match self {
+            NodeType::Document => "document",
+            NodeType::Clause => "clause",
+            NodeType::Subclause => "subclause",
+            NodeType::Annex => "annex",
+            NodeType::Table => "table",
+            NodeType::TableRow => "table_row",
+            NodeType::TableCell => "table_cell",
+            NodeType::List => "list",
+            NodeType::ListItem => "list_item",
+            NodeType::RequirementAtom => "requirement_atom",
+            NodeType::Page => "page",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ParsedTableRows {
+    rows: Vec<Vec<String>>,
+    markdown: Option<String>,
+    csv: Option<String>,
+    used_fallback: bool,
+}
+
+#[derive(Debug)]
+struct ListItemDraft {
+    marker: String,
+    text: String,
+    depth: i64,
 }
 
 #[derive(Debug)]
@@ -342,10 +479,12 @@ impl StructuredChunkParser {
             } else {
                 format!("{}\n\n{}", active.heading, body)
             };
+            let ref_path = derive_ref_path(&active.reference, active.chunk_type);
 
             StructuredChunkDraft {
                 chunk_type: active.chunk_type,
                 reference: active.reference,
+                ref_path,
                 heading: active.heading,
                 text,
                 page_start: active.page_start,
@@ -435,15 +574,24 @@ fn insert_chunks(
     let target_set: HashSet<u32> = target_parts.iter().copied().collect();
     let tx = connection.transaction()?;
     let mut stats = ChunkInsertStats::default();
+    let list_item_regex = Regex::new(r"^(?P<marker>(?:\d+|[A-Za-z])[\.)]|[-*•])\s+(?P<body>.+)$")
+        .context("failed to compile list item regex")?;
+    let table_cell_split_regex =
+        Regex::new(r"\t+|\s{2,}").context("failed to compile table cell split regex")?;
+    let requirement_split_regex =
+        Regex::new(r"[.;]\s+").context("failed to compile requirement split regex")?;
+    let requirement_keyword_regex = Regex::new(r"(?i)\bshall(?:\s+not)?\b|\bshould\b")
+        .context("failed to compile requirement keyword regex")?;
 
     {
-        let mut statement = tx.prepare(
+        let mut chunk_statement = tx.prepare(
             "
             INSERT INTO chunks(
               chunk_id, doc_id, type, ref, ref_path, heading, chunk_seq,
-              page_pdf_start, page_pdf_end, text, source_hash
+              page_pdf_start, page_pdf_end, text, table_md, table_csv, source_hash,
+              origin_node_id, leaf_node_type, ancestor_path
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ON CONFLICT(chunk_id) DO UPDATE SET
               doc_id=excluded.doc_id,
               type=excluded.type,
@@ -454,7 +602,35 @@ fn insert_chunks(
               page_pdf_start=excluded.page_pdf_start,
               page_pdf_end=excluded.page_pdf_end,
               text=excluded.text,
-              source_hash=excluded.source_hash
+              table_md=excluded.table_md,
+              table_csv=excluded.table_csv,
+              source_hash=excluded.source_hash,
+              origin_node_id=excluded.origin_node_id,
+              leaf_node_type=excluded.leaf_node_type,
+              ancestor_path=excluded.ancestor_path
+            ",
+        )?;
+
+        let mut node_statement = tx.prepare(
+            "
+            INSERT INTO nodes(
+              node_id, parent_node_id, doc_id, node_type, ref, ref_path, heading,
+              order_index, page_pdf_start, page_pdf_end, text, source_hash, ancestor_path
+            )
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(node_id) DO UPDATE SET
+              parent_node_id=excluded.parent_node_id,
+              doc_id=excluded.doc_id,
+              node_type=excluded.node_type,
+              ref=excluded.ref,
+              ref_path=excluded.ref_path,
+              heading=excluded.heading,
+              order_index=excluded.order_index,
+              page_pdf_start=excluded.page_pdf_start,
+              page_pdf_end=excluded.page_pdf_end,
+              text=excluded.text,
+              source_hash=excluded.source_hash,
+              ancestor_path=excluded.ancestor_path
             ",
         )?;
 
@@ -467,6 +643,7 @@ fn insert_chunks(
 
             let doc_id = doc_id_for(pdf);
             tx.execute("DELETE FROM chunks WHERE doc_id = ?1", [&doc_id])?;
+            tx.execute("DELETE FROM nodes WHERE doc_id = ?1", [&doc_id])?;
 
             let pdf_path = cache_root.join(&pdf.filename);
             if !pdf_path.exists() {
@@ -487,13 +664,119 @@ fn insert_chunks(
                 }
             };
 
+            let document_node_id = format!("{}:node:document", doc_id);
+            let document_path = format!("document:{}", doc_id);
+            let page_count = pages.len() as i64;
+            insert_node(
+                &mut node_statement,
+                &document_node_id,
+                None,
+                &doc_id,
+                NodeType::Document,
+                None,
+                None,
+                Some(&format!("ISO 26262 Part {}", pdf.part)),
+                0,
+                Some(1),
+                Some(page_count),
+                None,
+                &pdf.sha256,
+                &document_path,
+            )?;
+
+            stats.nodes_total += 1;
+
+            let mut node_paths = HashMap::<String, String>::new();
+            node_paths.insert(document_node_id.clone(), document_path);
+
+            let mut node_key_counts = HashMap::<String, i64>::new();
+            let mut chunk_key_counts = HashMap::<String, i64>::new();
+            let mut clause_ref_to_node_id = HashMap::<String, String>::new();
+            let mut last_clause_node_id: Option<String> = None;
+            let mut node_order_index: i64 = 1;
+
             let structured_chunks = parser.parse_pages(&pages);
-            let mut seen_refs: HashMap<String, i64> = HashMap::new();
             let mut structured_seq: i64 = 1;
 
             for chunk in structured_chunks {
+                let origin_node_type = chunk_origin_node_type(chunk.chunk_type, &chunk.reference);
+                let parent_node_id = match chunk.chunk_type {
+                    ChunkType::Table => last_clause_node_id
+                        .clone()
+                        .unwrap_or_else(|| document_node_id.clone()),
+                    ChunkType::Clause => {
+                        find_parent_clause_node_id(&chunk.reference, &clause_ref_to_node_id)
+                            .unwrap_or_else(|| document_node_id.clone())
+                    }
+                    ChunkType::Annex => document_node_id.clone(),
+                };
+
                 let ref_key = sanitize_ref_for_id(&chunk.reference);
-                let count = seen_refs
+                let node_count = node_key_counts
+                    .entry(format!("{}:{}", origin_node_type.as_str(), ref_key))
+                    .and_modify(|value| *value += 1)
+                    .or_insert(1);
+
+                let origin_node_id = format!(
+                    "{}:node:{}:{}:{:03}",
+                    doc_id,
+                    origin_node_type.as_str(),
+                    ref_key,
+                    node_count
+                );
+
+                let ancestor_path = build_ancestor_path(
+                    Some(&parent_node_id),
+                    &node_paths,
+                    origin_node_type,
+                    &chunk.reference,
+                    &chunk.heading,
+                );
+
+                insert_node(
+                    &mut node_statement,
+                    &origin_node_id,
+                    Some(&parent_node_id),
+                    &doc_id,
+                    origin_node_type,
+                    Some(&chunk.reference),
+                    Some(&chunk.ref_path),
+                    Some(&chunk.heading),
+                    node_order_index,
+                    Some(chunk.page_start),
+                    Some(chunk.page_end),
+                    Some(&chunk.text),
+                    &pdf.sha256,
+                    &ancestor_path,
+                )?;
+
+                node_paths.insert(origin_node_id.clone(), ancestor_path.clone());
+                node_order_index += 1;
+                stats.nodes_total += 1;
+                increment_node_type_stat(&mut stats, origin_node_type);
+
+                if matches!(origin_node_type, NodeType::Clause | NodeType::Subclause) {
+                    clause_ref_to_node_id.insert(chunk.reference.clone(), origin_node_id.clone());
+                    last_clause_node_id = Some(origin_node_id.clone());
+                }
+
+                let (table_md, table_csv, parsed_table_rows) =
+                    if chunk.chunk_type == ChunkType::Table {
+                        let parsed =
+                            parse_table_rows(&chunk.text, &chunk.heading, &table_cell_split_regex);
+                        (parsed.markdown.clone(), parsed.csv.clone(), Some(parsed))
+                    } else {
+                        (None::<String>, None::<String>, None::<ParsedTableRows>)
+                    };
+
+                if parsed_table_rows
+                    .as_ref()
+                    .is_some_and(|parsed| parsed.used_fallback)
+                {
+                    stats.table_raw_fallback_count += 1;
+                }
+
+                let chunk_count = chunk_key_counts
                     .entry(format!("{}:{}", chunk.chunk_type.as_str(), ref_key))
                     .and_modify(|value| *value += 1)
                     .or_insert(1);
@@ -503,21 +786,26 @@ fn insert_chunks(
                     doc_id,
                     chunk.chunk_type.as_str(),
                     ref_key,
-                    count
+                    chunk_count
                 );
 
-                statement.execute(params![
+                chunk_statement.execute(params![
                     chunk_id,
                     &doc_id,
                     chunk.chunk_type.as_str(),
                     &chunk.reference,
-                    &chunk.reference,
+                    &chunk.ref_path,
                     &chunk.heading,
                     structured_seq,
                     chunk.page_start,
                     chunk.page_end,
                     &chunk.text,
-                    &pdf.sha256
+                    &table_md,
+                    &table_csv,
+                    &pdf.sha256,
+                    &origin_node_id,
+                    origin_node_type.as_str(),
+                    &ancestor_path
                 ])?;
 
                 stats.structured_chunks_inserted += 1;
@@ -526,6 +814,70 @@ fn insert_chunks(
                     ChunkType::Table => stats.table_chunks_inserted += 1,
                     ChunkType::Annex => stats.annex_chunks_inserted += 1,
                 }
+
+                if let Some(parsed) = parsed_table_rows {
+                    insert_table_child_nodes(
+                        &mut node_statement,
+                        &doc_id,
+                        &origin_node_id,
+                        &ancestor_path,
+                        &chunk.reference,
+                        &parsed,
+                        chunk.page_start,
+                        chunk.page_end,
+                        &pdf.sha256,
+                        &mut node_order_index,
+                        &mut stats,
+                    )?;
+                }
+
+                if matches!(
+                    origin_node_type,
+                    NodeType::Clause | NodeType::Subclause | NodeType::Annex
+                ) {
+                    let (list_items, list_fallback) =
+                        parse_list_items(&chunk.text, &chunk.heading, &list_item_regex);
+                    if !list_items.is_empty() {
+                        insert_list_nodes(
+                            &mut node_statement,
+                            &doc_id,
+                            &origin_node_id,
+                            &ancestor_path,
+                            &chunk.reference,
+                            &list_items,
+                            chunk.page_start,
+                            chunk.page_end,
+                            &pdf.sha256,
+                            &mut node_order_index,
+                            &mut stats,
+                        )?;
+                    } else if list_fallback {
+                        stats.list_parse_fallback_count += 1;
+                    }
+
+                    let requirement_atoms = parse_requirement_atoms(
+                        &chunk.text,
+                        &chunk.heading,
+                        &requirement_split_regex,
+                        &requirement_keyword_regex,
+                    );
+                    if !requirement_atoms.is_empty() {
+                        insert_requirement_atom_nodes(
+                            &mut node_statement,
+                            &doc_id,
+                            &origin_node_id,
+                            &ancestor_path,
+                            &chunk.reference,
+                            &requirement_atoms,
+                            chunk.page_start,
+                            chunk.page_end,
+                            &pdf.sha256,
+                            &mut node_order_index,
+                            &mut stats,
+                        )?;
+                    }
+                }
+
                 structured_seq += 1;
             }
 
@@ -540,8 +892,35 @@ fn insert_chunks(
                     let chunk_id = format!("{}:page:{:04}", doc_id, page_number);
                     let page_ref = format!("PDF page {}", page_number);
                     let heading = format!("Page {}", page_number);
+                    let page_node_id = format!("{}:node:page:{:04}", doc_id, page_number);
+                    let page_ancestor_path = build_ancestor_path(
+                        Some(&document_node_id),
+                        &node_paths,
+                        NodeType::Page,
+                        &page_ref,
+                        &heading,
+                    );
 
-                    statement.execute(params![
+                    insert_node(
+                        &mut node_statement,
+                        &page_node_id,
+                        Some(&document_node_id),
+                        &doc_id,
+                        NodeType::Page,
+                        Some(&page_ref),
+                        Some(&page_ref),
+                        Some(&heading),
+                        node_order_index,
+                        Some(page_number),
+                        Some(page_number),
+                        Some(text),
+                        &pdf.sha256,
+                        &page_ancestor_path,
+                    )?;
+                    node_order_index += 1;
+                    stats.nodes_total += 1;
+
+                    chunk_statement.execute(params![
                         chunk_id,
                         &doc_id,
                         "page",
@@ -552,7 +931,12 @@ fn insert_chunks(
                         page_number,
                         page_number,
                         text,
-                        &pdf.sha256
+                        Option::<String>::None,
+                        Option::<String>::None,
+                        &pdf.sha256,
+                        &page_node_id,
+                        NodeType::Page.as_str(),
+                        &page_ancestor_path
                     ])?;
                     stats.page_chunks_inserted += 1;
                 }
@@ -562,6 +946,503 @@ fn insert_chunks(
 
     tx.commit()?;
     Ok(stats)
+}
+
+fn increment_node_type_stat(stats: &mut ChunkInsertStats, node_type: NodeType) {
+    match node_type {
+        NodeType::Clause => stats.clause_nodes_inserted += 1,
+        NodeType::Subclause => stats.subclause_nodes_inserted += 1,
+        NodeType::Annex => stats.annex_nodes_inserted += 1,
+        NodeType::Table => stats.table_nodes_inserted += 1,
+        NodeType::TableRow => stats.table_row_nodes_inserted += 1,
+        NodeType::TableCell => stats.table_cell_nodes_inserted += 1,
+        NodeType::List => stats.list_nodes_inserted += 1,
+        NodeType::ListItem => stats.list_item_nodes_inserted += 1,
+        NodeType::RequirementAtom => stats.requirement_atom_nodes_inserted += 1,
+        NodeType::Document | NodeType::Page => {}
+    }
+}
+
+fn chunk_origin_node_type(chunk_type: ChunkType, reference: &str) -> NodeType {
+    match chunk_type {
+        ChunkType::Clause => {
+            let depth = reference.split('.').count();
+            if depth > 2 {
+                NodeType::Subclause
+            } else {
+                NodeType::Clause
+            }
+        }
+        ChunkType::Table => NodeType::Table,
+        ChunkType::Annex => NodeType::Annex,
+    }
+}
+
+fn find_parent_clause_node_id(
+    reference: &str,
+    clause_ref_to_node_id: &HashMap<String, String>,
+) -> Option<String> {
+    let mut parts = reference.split('.').collect::<Vec<&str>>();
+    while parts.len() > 1 {
+        parts.pop();
+        let parent_ref = parts.join(".");
+        if let Some(parent) = clause_ref_to_node_id.get(&parent_ref) {
+            return Some(parent.clone());
+        }
+    }
+
+    None
+}
+
+fn build_ancestor_path(
+    parent_node_id: Option<&str>,
+    node_paths: &HashMap<String, String>,
+    node_type: NodeType,
+    reference: &str,
+    heading: &str,
+) -> String {
+    let node_label = if !reference.is_empty() {
+        format!("{}:{}", node_type.as_str(), reference)
+    } else if !heading.is_empty() {
+        format!("{}:{}", node_type.as_str(), heading)
+    } else {
+        format!("{}:unlabeled", node_type.as_str())
+    };
+
+    if let Some(parent) = parent_node_id.and_then(|node_id| node_paths.get(node_id)) {
+        format!("{} > {}", parent, node_label)
+    } else {
+        node_label
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_node(
+    statement: &mut rusqlite::Statement<'_>,
+    node_id: &str,
+    parent_node_id: Option<&str>,
+    doc_id: &str,
+    node_type: NodeType,
+    ref_value: Option<&str>,
+    ref_path: Option<&str>,
+    heading: Option<&str>,
+    order_index: i64,
+    page_start: Option<i64>,
+    page_end: Option<i64>,
+    text: Option<&str>,
+    source_hash: &str,
+    ancestor_path: &str,
+) -> Result<()> {
+    statement.execute(params![
+        node_id,
+        parent_node_id,
+        doc_id,
+        node_type.as_str(),
+        ref_value,
+        ref_path,
+        heading,
+        order_index,
+        page_start,
+        page_end,
+        text,
+        source_hash,
+        ancestor_path
+    ])?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_table_child_nodes(
+    node_statement: &mut rusqlite::Statement<'_>,
+    doc_id: &str,
+    table_node_id: &str,
+    table_ancestor_path: &str,
+    table_reference: &str,
+    parsed_table: &ParsedTableRows,
+    page_start: i64,
+    page_end: i64,
+    source_hash: &str,
+    node_order_index: &mut i64,
+    stats: &mut ChunkInsertStats,
+) -> Result<()> {
+    for (row_idx, row_cells) in parsed_table.rows.iter().enumerate() {
+        let row_node_id = format!("{}:row:{:03}", table_node_id, row_idx + 1);
+        let row_ref = format!("{} row {}", table_reference, row_idx + 1);
+        let row_heading = format!("{} row {}", table_reference, row_idx + 1);
+        let row_text = row_cells.join(" | ");
+        let row_path = format!("{} > table_row:{}", table_ancestor_path, row_idx + 1);
+
+        insert_node(
+            node_statement,
+            &row_node_id,
+            Some(table_node_id),
+            doc_id,
+            NodeType::TableRow,
+            Some(&row_ref),
+            Some(&row_ref),
+            Some(&row_heading),
+            *node_order_index,
+            Some(page_start),
+            Some(page_end),
+            Some(&row_text),
+            source_hash,
+            &row_path,
+        )?;
+
+        *node_order_index += 1;
+        stats.nodes_total += 1;
+        increment_node_type_stat(stats, NodeType::TableRow);
+
+        for (col_idx, cell_text) in row_cells.iter().enumerate() {
+            let cell_node_id = format!(
+                "{}:cell:{:03}:{:03}",
+                table_node_id,
+                row_idx + 1,
+                col_idx + 1
+            );
+            let cell_ref = format!("{} r{}c{}", table_reference, row_idx + 1, col_idx + 1);
+            let cell_heading = format!("{} r{}c{}", table_reference, row_idx + 1, col_idx + 1);
+            let cell_path = format!("{} > table_cell:r{}c{}", row_path, row_idx + 1, col_idx + 1);
+
+            insert_node(
+                node_statement,
+                &cell_node_id,
+                Some(&row_node_id),
+                doc_id,
+                NodeType::TableCell,
+                Some(&cell_ref),
+                Some(&cell_ref),
+                Some(&cell_heading),
+                *node_order_index,
+                Some(page_start),
+                Some(page_end),
+                Some(cell_text),
+                source_hash,
+                &cell_path,
+            )?;
+
+            *node_order_index += 1;
+            stats.nodes_total += 1;
+            increment_node_type_stat(stats, NodeType::TableCell);
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> ParsedTableRows {
+    let body_lines = extract_body_lines(text, heading);
+    let mut rows = Vec::<Vec<String>>::new();
+
+    for line in body_lines {
+        if line_is_noise(line) {
+            continue;
+        }
+
+        let cells = split_table_cells(line, cell_split_regex);
+        if !cells.is_empty() {
+            rows.push(cells);
+        }
+    }
+
+    let structured = rows.len() >= 2 && rows.iter().any(|cells| cells.len() > 1);
+    let markdown = if rows.is_empty() {
+        None
+    } else {
+        Some(table_to_markdown(&rows))
+    };
+    let csv = if rows.is_empty() {
+        None
+    } else {
+        Some(table_to_csv(&rows))
+    };
+
+    ParsedTableRows {
+        rows,
+        markdown,
+        csv,
+        used_fallback: !structured,
+    }
+}
+
+fn extract_body_lines<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
+    let mut lines = text.lines().collect::<Vec<&str>>();
+    if let Some(first) = lines.first() {
+        if first.trim() == heading.trim() {
+            lines.remove(0);
+        }
+    }
+    lines
+        .into_iter()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn line_is_noise(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.contains("license")
+        || lower.contains("downloaded:")
+        || lower.contains("single user")
+        || lower.contains("networking prohibited")
+}
+
+fn split_table_cells(line: &str, cell_split_regex: &Regex) -> Vec<String> {
+    let mut cells = cell_split_regex
+        .split(line)
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<String>>();
+
+    if cells.len() <= 1 && line.contains('|') {
+        cells = line
+            .split('|')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+
+    if cells.is_empty() {
+        vec![line.trim().to_string()]
+    } else {
+        cells
+    }
+}
+
+fn table_to_markdown(rows: &[Vec<String>]) -> String {
+    let col_count = rows.iter().map(|row| row.len()).max().unwrap_or(1).max(1);
+    let mut padded_rows = rows
+        .iter()
+        .map(|row| {
+            let mut current = row.clone();
+            while current.len() < col_count {
+                current.push(String::new());
+            }
+            current
+        })
+        .collect::<Vec<Vec<String>>>();
+
+    if padded_rows.is_empty() {
+        padded_rows.push(vec![String::new(); col_count]);
+    }
+
+    let header = padded_rows.first().cloned().unwrap_or_default();
+    let mut lines = Vec::<String>::new();
+    lines.push(format!("| {} |", header.join(" | ")));
+    lines.push(format!(
+        "| {} |",
+        (0..col_count)
+            .map(|_| "---")
+            .collect::<Vec<&str>>()
+            .join(" | ")
+    ));
+
+    for row in padded_rows.iter().skip(1) {
+        lines.push(format!("| {} |", row.join(" | ")));
+    }
+
+    lines.join("\n")
+}
+
+fn table_to_csv(rows: &[Vec<String>]) -> String {
+    rows.iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| escape_csv_cell(cell))
+                .collect::<Vec<String>>()
+                .join(",")
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+fn escape_csv_cell(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn parse_list_items(
+    text: &str,
+    heading: &str,
+    list_item_regex: &Regex,
+) -> (Vec<ListItemDraft>, bool) {
+    let body_lines = extract_body_lines(text, heading);
+    let mut items = Vec::<ListItemDraft>::new();
+    let mut list_like_lines = 0usize;
+
+    for line in body_lines {
+        if list_item_regex.is_match(line) {
+            list_like_lines += 1;
+        }
+
+        if let Some(captures) = list_item_regex.captures(line) {
+            let marker = captures
+                .name("marker")
+                .map(|value| value.as_str().to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let body = captures
+                .name("body")
+                .map(|value| value.as_str().trim().to_string())
+                .unwrap_or_default();
+
+            if !body.is_empty() {
+                items.push(ListItemDraft {
+                    marker,
+                    text: body,
+                    depth: 1,
+                });
+            }
+        }
+    }
+
+    let used_fallback = list_like_lines > 0 && items.is_empty();
+    (items, used_fallback)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_list_nodes(
+    node_statement: &mut rusqlite::Statement<'_>,
+    doc_id: &str,
+    parent_node_id: &str,
+    parent_path: &str,
+    reference: &str,
+    list_items: &[ListItemDraft],
+    page_start: i64,
+    page_end: i64,
+    source_hash: &str,
+    node_order_index: &mut i64,
+    stats: &mut ChunkInsertStats,
+) -> Result<()> {
+    let list_node_id = format!("{}:list:001", parent_node_id);
+    let list_ref = format!("{} list", reference);
+    let list_heading = format!("{} list", reference);
+    let list_path = format!("{} > list:{}", parent_path, reference);
+
+    insert_node(
+        node_statement,
+        &list_node_id,
+        Some(parent_node_id),
+        doc_id,
+        NodeType::List,
+        Some(&list_ref),
+        Some(&list_ref),
+        Some(&list_heading),
+        *node_order_index,
+        Some(page_start),
+        Some(page_end),
+        None,
+        source_hash,
+        &list_path,
+    )?;
+
+    *node_order_index += 1;
+    stats.nodes_total += 1;
+    increment_node_type_stat(stats, NodeType::List);
+
+    for (item_idx, item) in list_items.iter().enumerate() {
+        let list_item_node_id = format!("{}:item:{:03}", list_node_id, item_idx + 1);
+        let list_item_ref = format!("{} item {}", reference, item_idx + 1);
+        let list_item_heading = format!("{} {}", item.marker, item.text);
+        let list_item_path = format!("{} > list_item:{}", list_path, item_idx + 1);
+
+        insert_node(
+            node_statement,
+            &list_item_node_id,
+            Some(&list_node_id),
+            doc_id,
+            NodeType::ListItem,
+            Some(&list_item_ref),
+            Some(&list_item_ref),
+            Some(&list_item_heading),
+            *node_order_index,
+            Some(page_start),
+            Some(page_end),
+            Some(&item.text),
+            source_hash,
+            &list_item_path,
+        )?;
+
+        *node_order_index += 1;
+        stats.nodes_total += 1;
+        increment_node_type_stat(stats, NodeType::ListItem);
+        let _ = item.depth;
+    }
+
+    Ok(())
+}
+
+fn parse_requirement_atoms(
+    text: &str,
+    heading: &str,
+    split_regex: &Regex,
+    keyword_regex: &Regex,
+) -> Vec<String> {
+    let body = extract_body_lines(text, heading).join(" ");
+
+    split_regex
+        .split(&body)
+        .map(str::trim)
+        .filter(|sentence| !sentence.is_empty())
+        .filter(|sentence| keyword_regex.is_match(sentence))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<String>>()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_requirement_atom_nodes(
+    node_statement: &mut rusqlite::Statement<'_>,
+    doc_id: &str,
+    parent_node_id: &str,
+    parent_path: &str,
+    reference: &str,
+    atoms: &[String],
+    page_start: i64,
+    page_end: i64,
+    source_hash: &str,
+    node_order_index: &mut i64,
+    stats: &mut ChunkInsertStats,
+) -> Result<()> {
+    for (index, atom) in atoms.iter().enumerate() {
+        let node_id = format!("{}:req:{:03}", parent_node_id, index + 1);
+        let atom_ref = format!("{} req {}", reference, index + 1);
+        let atom_path = format!("{} > requirement_atom:{}", parent_path, index + 1);
+        let atom_heading = format!("Requirement atom {}", index + 1);
+
+        insert_node(
+            node_statement,
+            &node_id,
+            Some(parent_node_id),
+            doc_id,
+            NodeType::RequirementAtom,
+            Some(&atom_ref),
+            Some(&atom_ref),
+            Some(&atom_heading),
+            *node_order_index,
+            Some(page_start),
+            Some(page_end),
+            Some(atom),
+            source_hash,
+            &atom_path,
+        )?;
+
+        *node_order_index += 1;
+        stats.nodes_total += 1;
+        increment_node_type_stat(stats, NodeType::RequirementAtom);
+    }
+
+    Ok(())
+}
+
+fn derive_ref_path(reference: &str, chunk_type: ChunkType) -> String {
+    match chunk_type {
+        ChunkType::Clause => reference.split('.').collect::<Vec<&str>>().join(" > "),
+        ChunkType::Table | ChunkType::Annex => reference.to_string(),
+    }
 }
 
 fn normalize_line(input: &str) -> &str {
