@@ -38,6 +38,7 @@ fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_target(false)
+        .with_ansi(false)
         .with_writer(std::io::stderr)
         .init();
 }
