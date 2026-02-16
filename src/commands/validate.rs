@@ -138,6 +138,8 @@ struct RunStateManifest {
 #[derive(Debug, Deserialize, Default)]
 struct IngestRunSnapshot {
     #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
     counts: TableQualityCounters,
 }
 
@@ -344,13 +346,52 @@ fn load_gold_manifest(path: &Path) -> Result<GoldSetManifest> {
 }
 
 fn resolve_run_id(manifest_dir: &Path, fallback: &str) -> String {
+    let latest_ingest_run_id = load_latest_ingest_run_id(manifest_dir).ok().flatten();
+
     let run_state_path = manifest_dir.join("run_state.json");
-    let parsed = fs::read(&run_state_path)
+    let run_state_run_id = fs::read(&run_state_path)
         .ok()
         .and_then(|raw| serde_json::from_slice::<RunStateManifest>(&raw).ok())
         .and_then(|state| state.active_run_id);
 
-    parsed.unwrap_or_else(|| fallback.to_string())
+    latest_ingest_run_id
+        .or(run_state_run_id)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn load_latest_ingest_run_id(manifest_dir: &Path) -> Result<Option<String>> {
+    let mut latest_manifest_path: Option<PathBuf> = None;
+    let mut latest_manifest_name: Option<String> = None;
+
+    for entry in fs::read_dir(manifest_dir)? {
+        let entry = entry?;
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !file_name.starts_with("ingest_run_") || !file_name.ends_with(".json") {
+            continue;
+        }
+
+        match &latest_manifest_name {
+            Some(current) if file_name <= *current => {}
+            _ => {
+                latest_manifest_name = Some(file_name);
+                latest_manifest_path = Some(entry.path());
+            }
+        }
+    }
+
+    let Some(manifest_path) = latest_manifest_path else {
+        return Ok(None);
+    };
+
+    let raw = fs::read(&manifest_path)
+        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+    let snapshot: IngestRunSnapshot = serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+
+    Ok(snapshot
+        .run_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
 }
 
 fn load_table_quality_scorecard(manifest_dir: &Path) -> Result<TableQualityScorecard> {
