@@ -52,6 +52,9 @@ pub struct IngestArgs {
     #[arg(long, default_value_t = false)]
     pub seed_page_chunks: bool,
 
+    #[arg(long = "target-part")]
+    pub target_parts: Vec<u32>,
+
     #[arg(long)]
     pub max_pages_per_doc: Option<usize>,
 }

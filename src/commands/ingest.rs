@@ -1,9 +1,11 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use regex::Regex;
 use rusqlite::{Connection, params};
 use tracing::{info, warn};
 
@@ -57,19 +59,16 @@ pub fn run(args: IngestArgs) -> Result<()> {
 
     let docs_upserted = upsert_docs(&mut connection, &inventory)?;
 
-    let mut warnings = Vec::new();
-    let page_chunks_inserted = if args.seed_page_chunks {
-        let (inserted, extract_warnings) = seed_page_chunks(
-            &mut connection,
-            &cache_root,
-            &inventory.pdfs,
-            args.max_pages_per_doc,
-        )?;
-        warnings.extend(extract_warnings);
-        inserted
-    } else {
-        0
-    };
+    let parser = StructuredChunkParser::new()?;
+    let chunk_stats = insert_chunks(
+        &mut connection,
+        &cache_root,
+        &inventory.pdfs,
+        &parser,
+        args.max_pages_per_doc,
+        args.seed_page_chunks,
+        &args.target_parts,
+    )?;
 
     sync_fts_index(&connection)?;
 
@@ -98,17 +97,23 @@ pub fn run(args: IngestArgs) -> Result<()> {
         },
         counts: IngestCounts {
             pdf_count: inventory.pdf_count,
+            processed_pdf_count: chunk_stats.processed_pdf_count,
             docs_upserted,
             docs_total,
             chunks_total,
-            page_chunks_inserted,
+            structured_chunks_inserted: chunk_stats.structured_chunks_inserted,
+            clause_chunks_inserted: chunk_stats.clause_chunks_inserted,
+            table_chunks_inserted: chunk_stats.table_chunks_inserted,
+            annex_chunks_inserted: chunk_stats.annex_chunks_inserted,
+            page_chunks_inserted: chunk_stats.page_chunks_inserted,
             ocr_page_count: 0,
         },
         source_hashes: inventory.pdfs,
-        warnings,
+        warnings: chunk_stats.warnings,
         notes: vec![
             "Ingest command completed using local manifests and sqlite store.".to_string(),
-            "Page chunk seeding uses pdftotext extraction when enabled.".to_string(),
+            "Structured chunk extraction uses clause/table/annex heading heuristics from pdftotext text layer."
+                .to_string(),
         ],
     };
 
@@ -259,15 +264,177 @@ fn upsert_docs(connection: &mut Connection, inventory: &PdfInventoryManifest) ->
     Ok(inventory.pdfs.len())
 }
 
-fn seed_page_chunks(
+#[derive(Debug, Default)]
+struct ChunkInsertStats {
+    processed_pdf_count: usize,
+    structured_chunks_inserted: usize,
+    clause_chunks_inserted: usize,
+    table_chunks_inserted: usize,
+    annex_chunks_inserted: usize,
+    page_chunks_inserted: usize,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StructuredChunkDraft {
+    chunk_type: ChunkType,
+    reference: String,
+    heading: String,
+    text: String,
+    page_start: i64,
+    page_end: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ChunkType {
+    Clause,
+    Table,
+    Annex,
+}
+
+impl ChunkType {
+    fn as_str(self) -> &'static str {
+        match self {
+            ChunkType::Clause => "clause",
+            ChunkType::Table => "table",
+            ChunkType::Annex => "annex",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StructuredChunkParser {
+    clause_heading: Regex,
+    table_heading: Regex,
+    annex_heading: Regex,
+    toc_line: Regex,
+}
+
+impl StructuredChunkParser {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            clause_heading: Regex::new(r"^\s*(\d+(?:\.\d+)+)\s+(.+)$")
+                .context("failed to compile clause heading regex")?,
+            table_heading: Regex::new(r"^\s*(Table\s+\d+)\s*[-:–—]?\s*(.*)$")
+                .context("failed to compile table heading regex")?,
+            annex_heading: Regex::new(r"^\s*(Annex\s+[A-Z])(?:\s*\([^)]*\))?\s*[-:–—]?\s*(.*)$")
+                .context("failed to compile annex heading regex")?,
+            toc_line: Regex::new(r"\.{3,}\s*\d+\s*$")
+                .context("failed to compile table-of-contents line regex")?,
+        })
+    }
+
+    fn parse_pages(&self, pages: &[String]) -> Vec<StructuredChunkDraft> {
+        #[derive(Debug)]
+        struct ActiveChunk {
+            chunk_type: ChunkType,
+            reference: String,
+            heading: String,
+            page_start: i64,
+            page_end: i64,
+            body_lines: Vec<String>,
+        }
+
+        fn finalize(active: ActiveChunk) -> StructuredChunkDraft {
+            let body = active.body_lines.join("\n").trim().to_string();
+            let text = if body.is_empty() {
+                active.heading.clone()
+            } else {
+                format!("{}\n\n{}", active.heading, body)
+            };
+
+            StructuredChunkDraft {
+                chunk_type: active.chunk_type,
+                reference: active.reference,
+                heading: active.heading,
+                text,
+                page_start: active.page_start,
+                page_end: active.page_end,
+            }
+        }
+
+        let mut chunks = Vec::new();
+        let mut current: Option<ActiveChunk> = None;
+
+        for (page_index, page_text) in pages.iter().enumerate() {
+            let page_number = (page_index + 1) as i64;
+            for raw_line in page_text.lines() {
+                let line = normalize_line(raw_line);
+                if line.is_empty() {
+                    continue;
+                }
+
+                if let Some((chunk_type, reference, heading)) = self.detect_heading(line) {
+                    if let Some(active) = current.take() {
+                        chunks.push(finalize(active));
+                    }
+
+                    current = Some(ActiveChunk {
+                        chunk_type,
+                        reference,
+                        heading,
+                        page_start: page_number,
+                        page_end: page_number,
+                        body_lines: Vec::new(),
+                    });
+                    continue;
+                }
+
+                if let Some(active) = current.as_mut() {
+                    active.page_end = page_number;
+                    active.body_lines.push(line.to_string());
+                }
+            }
+        }
+
+        if let Some(active) = current.take() {
+            chunks.push(finalize(active));
+        }
+
+        chunks
+    }
+
+    fn detect_heading(&self, line: &str) -> Option<(ChunkType, String, String)> {
+        if self.toc_line.is_match(line) {
+            return None;
+        }
+
+        if let Some(captures) = self.table_heading.captures(line) {
+            let reference = captures.get(1).map(|m| m.as_str().trim().to_string())?;
+            return Some((ChunkType::Table, reference, line.to_string()));
+        }
+
+        if let Some(captures) = self.annex_heading.captures(line) {
+            let reference = captures.get(1).map(|m| m.as_str().trim().to_string())?;
+            return Some((ChunkType::Annex, reference, line.to_string()));
+        }
+
+        if let Some(captures) = self.clause_heading.captures(line) {
+            let reference = captures.get(1).map(|m| m.as_str().trim().to_string())?;
+            let title = captures.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+            if title.is_empty() || title.len() > 140 {
+                return None;
+            }
+
+            return Some((ChunkType::Clause, reference, line.to_string()));
+        }
+
+        None
+    }
+}
+
+fn insert_chunks(
     connection: &mut Connection,
     cache_root: &Path,
     pdfs: &[PdfEntry],
+    parser: &StructuredChunkParser,
     max_pages_per_doc: Option<usize>,
-) -> Result<(usize, Vec<String>)> {
+    seed_page_chunks: bool,
+    target_parts: &[u32],
+) -> Result<ChunkInsertStats> {
+    let target_set: HashSet<u32> = target_parts.iter().copied().collect();
     let tx = connection.transaction()?;
-    let mut inserted = 0usize;
-    let mut warnings = Vec::new();
+    let mut stats = ChunkInsertStats::default();
 
     {
         let mut statement = tx.prepare(
@@ -276,9 +443,10 @@ fn seed_page_chunks(
               chunk_id, doc_id, type, ref, ref_path, heading, chunk_seq,
               page_pdf_start, page_pdf_end, text, source_hash
             )
-            VALUES(?1, ?2, 'page', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(chunk_id) DO UPDATE SET
               doc_id=excluded.doc_id,
+              type=excluded.type,
               ref=excluded.ref,
               ref_path=excluded.ref_path,
               heading=excluded.heading,
@@ -291,9 +459,20 @@ fn seed_page_chunks(
         )?;
 
         for pdf in pdfs {
+            if !target_set.is_empty() && !target_set.contains(&pdf.part) {
+                continue;
+            }
+
+            stats.processed_pdf_count += 1;
+
+            let doc_id = doc_id_for(pdf);
+            tx.execute("DELETE FROM chunks WHERE doc_id = ?1", [&doc_id])?;
+
             let pdf_path = cache_root.join(&pdf.filename);
             if !pdf_path.exists() {
-                warnings.push(format!("missing source PDF: {}", pdf_path.display()));
+                stats
+                    .warnings
+                    .push(format!("missing source PDF: {}", pdf_path.display()));
                 continue;
             }
 
@@ -303,42 +482,107 @@ fn seed_page_chunks(
                     let warning =
                         format!("failed to extract text for {}: {err}", pdf_path.display());
                     warn!(warning = %warning, "pdf extraction warning");
-                    warnings.push(warning);
+                    stats.warnings.push(warning);
                     continue;
                 }
             };
 
-            let doc_id = doc_id_for(pdf);
-            for (index, page_text) in pages.into_iter().enumerate() {
-                let text = page_text.trim();
-                if text.is_empty() {
-                    continue;
-                }
+            let structured_chunks = parser.parse_pages(&pages);
+            let mut seen_refs: HashMap<String, i64> = HashMap::new();
+            let mut structured_seq: i64 = 1;
 
-                let page_number = (index + 1) as i64;
-                let chunk_id = format!("{}:page:{:04}", doc_id, page_number);
-                let page_ref = format!("PDF page {}", page_number);
-                let heading = format!("Page {}", page_number);
+            for chunk in structured_chunks {
+                let ref_key = sanitize_ref_for_id(&chunk.reference);
+                let count = seen_refs
+                    .entry(format!("{}:{}", chunk.chunk_type.as_str(), ref_key))
+                    .and_modify(|value| *value += 1)
+                    .or_insert(1);
+
+                let chunk_id = format!(
+                    "{}:{}:{}:{:03}",
+                    doc_id,
+                    chunk.chunk_type.as_str(),
+                    ref_key,
+                    count
+                );
 
                 statement.execute(params![
                     chunk_id,
                     &doc_id,
-                    &page_ref,
-                    &page_ref,
-                    &heading,
-                    page_number,
-                    page_number,
-                    page_number,
-                    text,
+                    chunk.chunk_type.as_str(),
+                    &chunk.reference,
+                    &chunk.reference,
+                    &chunk.heading,
+                    structured_seq,
+                    chunk.page_start,
+                    chunk.page_end,
+                    &chunk.text,
                     &pdf.sha256
                 ])?;
-                inserted += 1;
+
+                stats.structured_chunks_inserted += 1;
+                match chunk.chunk_type {
+                    ChunkType::Clause => stats.clause_chunks_inserted += 1,
+                    ChunkType::Table => stats.table_chunks_inserted += 1,
+                    ChunkType::Annex => stats.annex_chunks_inserted += 1,
+                }
+                structured_seq += 1;
+            }
+
+            if seed_page_chunks {
+                for (index, page_text) in pages.into_iter().enumerate() {
+                    let text = page_text.trim();
+                    if text.is_empty() {
+                        continue;
+                    }
+
+                    let page_number = (index + 1) as i64;
+                    let chunk_id = format!("{}:page:{:04}", doc_id, page_number);
+                    let page_ref = format!("PDF page {}", page_number);
+                    let heading = format!("Page {}", page_number);
+
+                    statement.execute(params![
+                        chunk_id,
+                        &doc_id,
+                        "page",
+                        &page_ref,
+                        &page_ref,
+                        &heading,
+                        page_number,
+                        page_number,
+                        page_number,
+                        text,
+                        &pdf.sha256
+                    ])?;
+                    stats.page_chunks_inserted += 1;
+                }
             }
         }
     }
 
     tx.commit()?;
-    Ok((inserted, warnings))
+    Ok(stats)
+}
+
+fn normalize_line(input: &str) -> &str {
+    input.trim()
+}
+
+fn sanitize_ref_for_id(reference: &str) -> String {
+    let mut out = String::with_capacity(reference.len());
+    for ch in reference.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+
+    out.trim_matches('_').to_string()
 }
 
 fn extract_pages_with_pdftotext(
@@ -460,6 +704,10 @@ fn render_ingest_command(args: &IngestArgs) -> String {
     }
     if args.seed_page_chunks {
         command.push("--seed-page-chunks".to_string());
+    }
+    for part in &args.target_parts {
+        command.push("--target-part".to_string());
+        command.push(part.to_string());
     }
     if let Some(max_pages) = args.max_pages_per_doc {
         command.push("--max-pages-per-doc".to_string());

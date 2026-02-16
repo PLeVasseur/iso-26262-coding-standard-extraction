@@ -50,9 +50,14 @@ pub struct IngestPaths {
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestCounts {
     pub pdf_count: usize,
+    pub processed_pdf_count: usize,
     pub docs_upserted: usize,
     pub docs_total: i64,
     pub chunks_total: i64,
+    pub structured_chunks_inserted: usize,
+    pub clause_chunks_inserted: usize,
+    pub table_chunks_inserted: usize,
+    pub annex_chunks_inserted: usize,
     pub page_chunks_inserted: usize,
     pub ocr_page_count: usize,
 }
