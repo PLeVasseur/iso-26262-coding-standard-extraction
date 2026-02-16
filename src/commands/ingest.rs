@@ -119,6 +119,12 @@ pub fn run(args: IngestArgs) -> Result<()> {
             requirement_atom_nodes_inserted: chunk_stats.requirement_atom_nodes_inserted,
             table_raw_fallback_count: chunk_stats.table_raw_fallback_count,
             list_parse_fallback_count: chunk_stats.list_parse_fallback_count,
+            table_sparse_rows_count: chunk_stats.table_sparse_rows_count,
+            table_overloaded_rows_count: chunk_stats.table_overloaded_rows_count,
+            table_rows_with_markers_count: chunk_stats.table_rows_with_markers_count,
+            table_rows_with_descriptions_count: chunk_stats.table_rows_with_descriptions_count,
+            table_marker_expected_count: chunk_stats.table_marker_expected_count,
+            table_marker_observed_count: chunk_stats.table_marker_observed_count,
             ocr_page_count: 0,
         },
         source_hashes: inventory.pdfs,
@@ -386,6 +392,12 @@ struct ChunkInsertStats {
     requirement_atom_nodes_inserted: usize,
     table_raw_fallback_count: usize,
     list_parse_fallback_count: usize,
+    table_sparse_rows_count: usize,
+    table_overloaded_rows_count: usize,
+    table_rows_with_markers_count: usize,
+    table_rows_with_descriptions_count: usize,
+    table_marker_expected_count: usize,
+    table_marker_observed_count: usize,
     warnings: Vec<String>,
 }
 
@@ -460,6 +472,17 @@ struct ParsedTableRows {
     markdown: Option<String>,
     csv: Option<String>,
     used_fallback: bool,
+    quality: TableQualityCounters,
+}
+
+#[derive(Debug, Default)]
+struct TableQualityCounters {
+    sparse_rows_count: usize,
+    overloaded_rows_count: usize,
+    rows_with_markers_count: usize,
+    rows_with_descriptions_count: usize,
+    marker_expected_count: usize,
+    marker_observed_count: usize,
 }
 
 #[derive(Debug)]
@@ -921,6 +944,16 @@ fn insert_chunks(
                     .is_some_and(|parsed| parsed.used_fallback)
                 {
                     stats.table_raw_fallback_count += 1;
+                }
+
+                if let Some(parsed) = parsed_table_rows.as_ref() {
+                    stats.table_sparse_rows_count += parsed.quality.sparse_rows_count;
+                    stats.table_overloaded_rows_count += parsed.quality.overloaded_rows_count;
+                    stats.table_rows_with_markers_count += parsed.quality.rows_with_markers_count;
+                    stats.table_rows_with_descriptions_count +=
+                        parsed.quality.rows_with_descriptions_count;
+                    stats.table_marker_expected_count += parsed.quality.marker_expected_count;
+                    stats.table_marker_observed_count += parsed.quality.marker_observed_count;
                 }
 
                 let chunk_count = chunk_key_counts
@@ -1387,9 +1420,23 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
     }
 
     let mut structured = rows.len() >= 2 && rows.iter().any(|cells| cells.len() > 1);
-    if !structured {
-        let reconstructed = reconstruct_table_rows_from_markers(&body_lines);
-        if reconstructed.len() >= 2 && reconstructed.iter().any(|cells| cells.len() > 1) {
+    let reconstructed = reconstruct_table_rows_from_markers(&body_lines);
+    if !reconstructed.is_empty() {
+        let original_quality = analyze_table_rows(&rows);
+        let reconstructed_quality = analyze_table_rows(&reconstructed);
+
+        if prefer_reconstructed_rows(
+            rows.len(),
+            &original_quality,
+            reconstructed.len(),
+            &reconstructed_quality,
+        ) {
+            rows = reconstructed;
+            structured = rows.len() >= 2 && rows.iter().any(|cells| cells.len() > 1);
+        } else if !structured
+            && reconstructed.len() >= 2
+            && reconstructed.iter().any(|cells| cells.len() > 1)
+        {
             rows = reconstructed;
             structured = true;
         }
@@ -1405,22 +1452,132 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
     } else {
         Some(table_to_csv(&rows))
     };
+    let quality = analyze_table_rows(&rows);
 
     ParsedTableRows {
         rows,
         markdown,
         csv,
         used_fallback: !structured,
+        quality,
     }
 }
 
+fn analyze_table_rows(rows: &[Vec<String>]) -> TableQualityCounters {
+    let mut counters = TableQualityCounters::default();
+    let mut observed_markers = HashSet::<(i64, Option<char>)>::new();
+
+    for row in rows {
+        let first_cell = row.first().map(|value| value.as_str()).unwrap_or_default();
+        let row_marker = parse_table_marker_token(first_cell);
+        let row_marker_count = count_row_marker_tokens(row);
+
+        if let Some(marker) = row_marker {
+            counters.rows_with_markers_count += 1;
+            observed_markers.insert(marker);
+
+            if has_row_description(row) {
+                counters.rows_with_descriptions_count += 1;
+            } else {
+                counters.sparse_rows_count += 1;
+            }
+        }
+
+        if row_marker_count > 1 {
+            counters.overloaded_rows_count += 1;
+        }
+    }
+
+    counters.marker_observed_count = observed_markers.len();
+    counters.marker_expected_count = estimate_expected_marker_count(&observed_markers);
+    counters
+}
+
+fn parse_table_marker_token(value: &str) -> Option<(i64, Option<char>)> {
+    let marker = normalize_marker_label(value);
+    parse_numeric_alpha_marker(&marker)
+}
+
+fn count_row_marker_tokens(row: &[String]) -> usize {
+    let mut marker_tokens = HashSet::<(i64, Option<char>)>::new();
+
+    for cell in row {
+        for token in cell.split_whitespace() {
+            let trimmed = token.trim_matches(['(', ')', '.', ':', ';', ',']);
+            if let Some(marker) = parse_table_marker_token(trimmed) {
+                marker_tokens.insert(marker);
+            }
+        }
+    }
+
+    marker_tokens.len()
+}
+
+fn has_row_description(row: &[String]) -> bool {
+    if row.len() < 2 {
+        return false;
+    }
+
+    let description = row[1].trim();
+    !description.is_empty() && description.chars().any(|value| value.is_ascii_alphabetic())
+}
+
+fn estimate_expected_marker_count(observed_markers: &HashSet<(i64, Option<char>)>) -> usize {
+    let mut grouped = HashMap::<i64, Vec<Option<char>>>::new();
+
+    for (number, suffix) in observed_markers {
+        grouped.entry(*number).or_default().push(*suffix);
+    }
+
+    let mut expected = 0usize;
+    for suffixes in grouped.values() {
+        let with_suffix = suffixes
+            .iter()
+            .filter_map(|suffix| *suffix)
+            .collect::<Vec<char>>();
+
+        if with_suffix.is_empty() {
+            expected += suffixes.len().max(1);
+            continue;
+        }
+
+        let min_index = with_suffix
+            .iter()
+            .map(|suffix| (*suffix as u8).saturating_sub(b'a') as usize)
+            .min()
+            .unwrap_or(0);
+        let max_index = with_suffix
+            .iter()
+            .map(|suffix| (*suffix as u8).saturating_sub(b'a') as usize)
+            .max()
+            .unwrap_or(min_index);
+
+        expected += (max_index.saturating_sub(min_index) + 1).max(with_suffix.len());
+    }
+
+    expected
+}
+
 fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
-    let marker_regex =
-        Regex::new(r"^(?P<marker>\d+[A-Za-z]?)(?:\s+(?P<body>.+))?$").expect("valid marker regex");
+    let marker_with_body_regex = Regex::new(r"^(?P<marker>\d+[A-Za-z]?)[\.)]?\s+(?P<body>.+)$")
+        .expect("valid marker with body regex");
+    let marker_only_regex =
+        Regex::new(r"^(?P<marker>\d+[A-Za-z]?)[\.)]?$").expect("valid marker only regex");
+    let marker_list_regex = Regex::new(r"^(?P<list>(?:\d+[A-Za-z]?\s+){1,}\d+[A-Za-z]?)$")
+        .expect("valid marker list regex");
     let plus_regex = Regex::new(r"^\+{1,2}$").expect("valid plus regex");
 
     let mut rows = Vec::<Vec<String>>::new();
     let mut current_row: Option<Vec<String>> = None;
+    let mut pending_markers = Vec::<String>::new();
+
+    let flush_current = |rows: &mut Vec<Vec<String>>, current_row: &mut Option<Vec<String>>| {
+        if let Some(row) = current_row.take() {
+            if row.len() > 1 {
+                rows.push(row);
+            }
+        }
+    };
 
     for raw_line in lines {
         let line = raw_line.trim();
@@ -1428,12 +1585,24 @@ fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
             continue;
         }
 
-        if let Some(captures) = marker_regex.captures(line) {
-            if let Some(row) = current_row.take() {
-                if row.len() > 1 {
-                    rows.push(row);
-                }
-            }
+        if let Some(captures) = marker_list_regex.captures(line) {
+            flush_current(&mut rows, &mut current_row);
+
+            let marker_list = captures
+                .name("list")
+                .map(|value| value.as_str())
+                .unwrap_or("");
+            pending_markers = marker_list
+                .split_whitespace()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+            continue;
+        }
+
+        if let Some(captures) = marker_with_body_regex.captures(line) {
+            flush_current(&mut rows, &mut current_row);
 
             let marker = captures
                 .name("marker")
@@ -1450,14 +1619,35 @@ fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
             continue;
         }
 
+        if let Some(captures) = marker_only_regex.captures(line) {
+            flush_current(&mut rows, &mut current_row);
+            let marker = captures
+                .name("marker")
+                .map(|value| value.as_str().trim().to_string())
+                .unwrap_or_default();
+            if !marker.is_empty() {
+                pending_markers.push(marker);
+            }
+            continue;
+        }
+
+        if plus_regex.is_match(line) {
+            if let Some(row) = current_row.as_mut() {
+                row.push(line.to_string());
+            }
+            continue;
+        }
+
+        if !pending_markers.is_empty() {
+            flush_current(&mut rows, &mut current_row);
+            let marker = pending_markers.remove(0);
+            current_row = Some(vec![marker, line.to_string()]);
+            continue;
+        }
+
         let Some(row) = current_row.as_mut() else {
             continue;
         };
-
-        if plus_regex.is_match(line) {
-            row.push(line.to_string());
-            continue;
-        }
 
         if row.len() <= 1 {
             row.push(line.to_string());
@@ -1477,7 +1667,59 @@ fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
         }
     }
 
+    for marker in pending_markers {
+        rows.push(vec![marker, String::new()]);
+    }
+
     rows
+}
+
+fn prefer_reconstructed_rows(
+    original_rows_count: usize,
+    original_quality: &TableQualityCounters,
+    reconstructed_rows_count: usize,
+    reconstructed_quality: &TableQualityCounters,
+) -> bool {
+    if reconstructed_rows_count < 2 {
+        return false;
+    }
+
+    if reconstructed_quality.rows_with_markers_count == 0 {
+        return false;
+    }
+
+    let original_sparse_ratio = if original_rows_count == 0 {
+        1.0
+    } else {
+        original_quality.sparse_rows_count as f64 / original_rows_count as f64
+    };
+    let reconstructed_sparse_ratio =
+        reconstructed_quality.sparse_rows_count as f64 / reconstructed_rows_count as f64;
+
+    let original_description_coverage = ratio_usize(
+        original_quality.rows_with_descriptions_count,
+        original_quality.rows_with_markers_count,
+    )
+    .unwrap_or(0.0);
+    let reconstructed_description_coverage = ratio_usize(
+        reconstructed_quality.rows_with_descriptions_count,
+        reconstructed_quality.rows_with_markers_count,
+    )
+    .unwrap_or(0.0);
+
+    (reconstructed_sparse_ratio + 0.05) < original_sparse_ratio
+        || (reconstructed_description_coverage > original_description_coverage + 0.10)
+        || (reconstructed_quality.sparse_rows_count < original_quality.sparse_rows_count
+            && reconstructed_quality.rows_with_descriptions_count
+                >= original_quality.rows_with_descriptions_count)
+}
+
+fn ratio_usize(numerator: usize, denominator: usize) -> Option<f64> {
+    if denominator == 0 {
+        None
+    } else {
+        Some(numerator as f64 / denominator as f64)
+    }
 }
 
 fn extract_body_lines<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {

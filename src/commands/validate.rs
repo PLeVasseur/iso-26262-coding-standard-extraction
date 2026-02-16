@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OpenFlags};
@@ -11,6 +11,10 @@ use crate::cli::ValidateArgs;
 use crate::util::{now_utc_string, write_json_pretty};
 
 const DB_SCHEMA_VERSION: &str = "0.3.0";
+const TABLE_SPARSE_ROW_RATIO_MAX: f64 = 0.20;
+const TABLE_OVERLOADED_ROW_RATIO_MAX: f64 = 0.10;
+const TABLE_MARKER_SEQUENCE_COVERAGE_MIN: f64 = 0.90;
+const TABLE_DESCRIPTION_COVERAGE_MIN: f64 = 0.90;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GoldSetManifest {
@@ -81,9 +85,31 @@ struct QualityReport {
     status: String,
     summary: QualitySummary,
     hierarchy_metrics: HierarchyMetrics,
+    table_quality_scorecard: TableQualityScorecard,
     checks: Vec<QualityCheck>,
     issues: Vec<String>,
     recommendations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TableQualityScorecard {
+    source_manifest: Option<String>,
+    counters: TableQualityCounters,
+    table_sparse_row_ratio: Option<f64>,
+    table_overloaded_row_ratio: Option<f64>,
+    table_marker_sequence_coverage: Option<f64>,
+    table_description_coverage: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct TableQualityCounters {
+    table_row_nodes_inserted: usize,
+    table_sparse_rows_count: usize,
+    table_overloaded_rows_count: usize,
+    table_rows_with_markers_count: usize,
+    table_rows_with_descriptions_count: usize,
+    table_marker_expected_count: usize,
+    table_marker_observed_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +132,12 @@ struct RunStateManifest {
     active_run_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct IngestRunSnapshot {
+    #[serde(default)]
+    counts: TableQualityCounters,
+}
+
 pub fn run(args: ValidateArgs) -> Result<()> {
     let manifest_dir = args.cache_root.join("manifests");
     let gold_manifest_path = args
@@ -123,6 +155,8 @@ pub fn run(args: ValidateArgs) -> Result<()> {
 
     let mut gold_manifest = load_gold_manifest(&gold_manifest_path)?;
     let run_id = resolve_run_id(&manifest_dir, &gold_manifest.run_id);
+    let table_quality_scorecard =
+        load_table_quality_scorecard(&manifest_dir).unwrap_or_else(|_| empty_table_scorecard());
 
     let connection = Connection::open_with_flags(
         &db_path,
@@ -153,7 +187,12 @@ pub fn run(args: ValidateArgs) -> Result<()> {
 
     write_json_pretty(&gold_manifest_path, &gold_manifest)?;
 
-    let checks = build_quality_checks(&connection, &gold_manifest.gold_references, &evaluations)?;
+    let checks = build_quality_checks(
+        &connection,
+        &gold_manifest.gold_references,
+        &evaluations,
+        &table_quality_scorecard,
+    )?;
     let summary = summarize_checks(&checks);
     let hierarchy_metrics = build_hierarchy_metrics(&evaluations);
 
@@ -200,6 +239,42 @@ pub fn run(args: ValidateArgs) -> Result<()> {
                 .to_string(),
         );
     }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-011" && check.result == "failed")
+    {
+        recommendations.push(
+            "Reduce sparse table rows by improving continuation merge rules for marker-bearing rows."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-012" && check.result == "failed")
+    {
+        recommendations.push(
+            "Reduce overloaded table rows by splitting rows that contain multiple marker tokens."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-013" && check.result == "failed")
+    {
+        recommendations.push(
+            "Improve table marker sequence coverage by repairing missing marker rows and preserving marker order."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-014" && check.result == "failed")
+    {
+        recommendations.push(
+            "Increase table description coverage by populating non-empty description cells for marker rows."
+                .to_string(),
+        );
+    }
 
     let report = QualityReport {
         manifest_version: 1,
@@ -214,6 +289,7 @@ pub fn run(args: ValidateArgs) -> Result<()> {
         },
         summary,
         hierarchy_metrics,
+        table_quality_scorecard,
         checks,
         issues,
         recommendations,
@@ -245,6 +321,80 @@ fn resolve_run_id(manifest_dir: &Path, fallback: &str) -> String {
         .and_then(|state| state.active_run_id);
 
     parsed.unwrap_or_else(|| fallback.to_string())
+}
+
+fn load_table_quality_scorecard(manifest_dir: &Path) -> Result<TableQualityScorecard> {
+    let mut latest_manifest: Option<(String, PathBuf)> = None;
+
+    for entry in fs::read_dir(manifest_dir)? {
+        let entry = entry?;
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !file_name.starts_with("ingest_run_") || !file_name.ends_with(".json") {
+            continue;
+        }
+
+        match &latest_manifest {
+            Some((current, _)) if file_name <= *current => {}
+            _ => latest_manifest = Some((file_name, entry.path())),
+        }
+    }
+
+    let Some((manifest_name, manifest_path)) = latest_manifest else {
+        return Ok(empty_table_scorecard());
+    };
+
+    let raw = fs::read(&manifest_path)
+        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+    let snapshot: IngestRunSnapshot = serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+
+    Ok(build_table_quality_scorecard(
+        Some(manifest_name),
+        snapshot.counts,
+    ))
+}
+
+fn empty_table_scorecard() -> TableQualityScorecard {
+    build_table_quality_scorecard(None, TableQualityCounters::default())
+}
+
+fn build_table_quality_scorecard(
+    source_manifest: Option<String>,
+    counters: TableQualityCounters,
+) -> TableQualityScorecard {
+    let table_sparse_row_ratio = ratio(
+        counters.table_sparse_rows_count,
+        counters.table_row_nodes_inserted,
+    );
+    let table_overloaded_row_ratio = ratio(
+        counters.table_overloaded_rows_count,
+        counters.table_row_nodes_inserted,
+    );
+    let table_marker_sequence_coverage = ratio(
+        counters.table_marker_observed_count,
+        counters.table_marker_expected_count,
+    );
+    let table_description_coverage = ratio(
+        counters.table_rows_with_descriptions_count,
+        counters.table_rows_with_markers_count,
+    );
+
+    TableQualityScorecard {
+        source_manifest,
+        counters,
+        table_sparse_row_ratio,
+        table_overloaded_row_ratio,
+        table_marker_sequence_coverage,
+        table_description_coverage,
+    }
+}
+
+fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
+    if denominator == 0 {
+        None
+    } else {
+        Some(numerator as f64 / denominator as f64)
+    }
 }
 
 fn collect_evaluable_doc_ids(connection: &Connection) -> Result<HashSet<String>> {
@@ -466,6 +616,7 @@ fn build_quality_checks(
     connection: &Connection,
     refs: &[GoldReference],
     evals: &[ReferenceEvaluation],
+    table_quality: &TableQualityScorecard,
 ) -> Result<Vec<QualityCheck>> {
     let evaluable = refs
         .iter()
@@ -684,7 +835,60 @@ fn build_quality_checks(
         .to_string(),
     });
 
+    checks.push(QualityCheck {
+        check_id: "Q-011".to_string(),
+        name: "Table sparse-row ratio threshold".to_string(),
+        result: evaluate_max_threshold(
+            table_quality.table_sparse_row_ratio,
+            TABLE_SPARSE_ROW_RATIO_MAX,
+        )
+        .to_string(),
+    });
+    checks.push(QualityCheck {
+        check_id: "Q-012".to_string(),
+        name: "Table overloaded-row ratio threshold".to_string(),
+        result: evaluate_max_threshold(
+            table_quality.table_overloaded_row_ratio,
+            TABLE_OVERLOADED_ROW_RATIO_MAX,
+        )
+        .to_string(),
+    });
+    checks.push(QualityCheck {
+        check_id: "Q-013".to_string(),
+        name: "Table marker-sequence coverage threshold".to_string(),
+        result: evaluate_min_threshold(
+            table_quality.table_marker_sequence_coverage,
+            TABLE_MARKER_SEQUENCE_COVERAGE_MIN,
+        )
+        .to_string(),
+    });
+    checks.push(QualityCheck {
+        check_id: "Q-014".to_string(),
+        name: "Table description coverage threshold".to_string(),
+        result: evaluate_min_threshold(
+            table_quality.table_description_coverage,
+            TABLE_DESCRIPTION_COVERAGE_MIN,
+        )
+        .to_string(),
+    });
+
     Ok(checks)
+}
+
+fn evaluate_max_threshold(value: Option<f64>, max_allowed: f64) -> &'static str {
+    match value {
+        Some(actual) if actual <= max_allowed => "pass",
+        Some(_) => "failed",
+        None => "pending",
+    }
+}
+
+fn evaluate_min_threshold(value: Option<f64>, min_allowed: f64) -> &'static str {
+    match value {
+        Some(actual) if actual >= min_allowed => "pass",
+        Some(_) => "failed",
+        None => "pending",
+    }
 }
 
 fn summarize_checks(checks: &[QualityCheck]) -> QualitySummary {
