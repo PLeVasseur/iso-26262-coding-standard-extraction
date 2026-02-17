@@ -31,8 +31,19 @@ pub fn run(args: StatusArgs) -> Result<()> {
             active_branch = %state.active_branch.unwrap_or_default(),
             commit_mode = %state.commit_mode.unwrap_or_default(),
             last_commit = %state.last_commit.unwrap_or_default(),
+            started_at = %state.started_at.unwrap_or_default(),
+            failed_step = %state.failed_step.unwrap_or_default(),
+            failure_reason = %state.failure_reason.unwrap_or_default(),
+            resume_from_step = %state.resume_from_step.unwrap_or_default(),
             updated_at = %state.updated_at.unwrap_or_default(),
             last_successful_command = %state.last_successful_command.unwrap_or_default(),
+            next_planned_command = %state.next_planned_command.unwrap_or_default(),
+            last_successful_artifact = %state.last_successful_artifact.unwrap_or_default(),
+            compatibility_status = %state.compatibility.as_ref().and_then(|value| value.status.as_ref()).cloned().unwrap_or_default(),
+            compatibility_reason = %state.compatibility.as_ref().and_then(|value| value.reason.as_ref()).cloned().unwrap_or_default(),
+            compatibility_runbook_version = %state.compatibility.as_ref().and_then(|value| value.runbook_version.as_ref()).cloned().unwrap_or_default(),
+            compatibility_engine_version = %state.compatibility.as_ref().and_then(|value| value.engine_version.as_ref()).cloned().unwrap_or_default(),
+            compatibility_db_schema_version = %state.compatibility.as_ref().and_then(|value| value.db_schema_version.as_ref()).cloned().unwrap_or_default(),
             "loaded run-state manifest"
         );
     } else {

@@ -28,8 +28,24 @@ pub struct RunStateManifest {
     pub active_branch: Option<String>,
     pub commit_mode: Option<String>,
     pub last_commit: Option<String>,
+    pub failed_step: Option<String>,
+    pub failure_reason: Option<String>,
+    pub resume_from_step: Option<String>,
+    pub next_planned_command: Option<String>,
+    pub started_at: Option<String>,
     pub updated_at: Option<String>,
     pub last_successful_command: Option<String>,
+    pub last_successful_artifact: Option<String>,
+    pub compatibility: Option<RunStateCompatibility>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunStateCompatibility {
+    pub runbook_version: Option<String>,
+    pub engine_version: Option<String>,
+    pub db_schema_version: Option<String>,
+    pub status: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
