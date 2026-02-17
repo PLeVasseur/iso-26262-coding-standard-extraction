@@ -95,6 +95,7 @@ pub fn run(args: IngestArgs) -> Result<()> {
             inventory_manifest_path: inventory_manifest_path.display().to_string(),
             db_path: db_path.display().to_string(),
         },
+        processed_parts: chunk_stats.processed_parts.clone(),
         counts: IngestCounts {
             pdf_count: inventory.pdf_count,
             processed_pdf_count: chunk_stats.processed_pdf_count,
@@ -376,6 +377,7 @@ fn upsert_docs(connection: &mut Connection, inventory: &PdfInventoryManifest) ->
 #[derive(Debug, Default)]
 struct ChunkInsertStats {
     processed_pdf_count: usize,
+    processed_parts: Vec<u32>,
     structured_chunks_inserted: usize,
     clause_chunks_inserted: usize,
     table_chunks_inserted: usize,
@@ -732,6 +734,10 @@ fn insert_chunks(
             }
 
             stats.processed_pdf_count += 1;
+            if !stats.processed_parts.contains(&pdf.part) {
+                stats.processed_parts.push(pdf.part);
+                stats.processed_parts.sort_unstable();
+            }
 
             let doc_id = doc_id_for(pdf);
             tx.execute("DELETE FROM chunks WHERE doc_id = ?1", [&doc_id])?;

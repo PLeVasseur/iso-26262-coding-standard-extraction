@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +36,14 @@ struct GoldReference {
     doc_id: String,
     #[serde(rename = "ref")]
     reference: String,
+    #[serde(default)]
+    target_id: Option<String>,
+    #[serde(default)]
+    target_ref_raw: Option<String>,
+    #[serde(default)]
+    canonical_ref: Option<String>,
+    #[serde(default)]
+    ref_resolution_mode: Option<String>,
     expected_page_pattern: String,
     must_match_terms: Vec<String>,
     #[serde(default)]
@@ -83,6 +91,38 @@ struct HierarchyMetrics {
     references_with_list_items: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct TargetCoverageReport {
+    source_manifest: Option<String>,
+    target_total: usize,
+    target_linked_gold_total: usize,
+    covered_target_total: usize,
+    missing_target_ids: Vec<String>,
+    duplicate_target_ids: Vec<String>,
+    unexpected_target_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FreshnessReport {
+    source_manifest_dir: String,
+    required_parts: Vec<u32>,
+    latest_manifest: Option<String>,
+    latest_run_id: Option<String>,
+    latest_started_at: Option<String>,
+    latest_run_parts: Vec<u32>,
+    latest_run_by_part: Vec<PartFreshness>,
+    full_target_cycle_run_id: Option<String>,
+    stale_parts: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PartFreshness {
+    part: u32,
+    manifest: Option<String>,
+    run_id: Option<String>,
+    started_at: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct QualityReport {
     manifest_version: u32,
@@ -90,6 +130,8 @@ struct QualityReport {
     generated_at: String,
     status: String,
     summary: QualitySummary,
+    target_coverage: TargetCoverageReport,
+    freshness: FreshnessReport,
     hierarchy_metrics: HierarchyMetrics,
     table_quality_scorecard: TableQualityScorecard,
     checks: Vec<QualityCheck>,
@@ -108,6 +150,7 @@ struct TableQualityScorecard {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct TableQualityCounters {
     table_row_nodes_inserted: usize,
     table_sparse_rows_count: usize,
@@ -195,7 +238,32 @@ struct IngestRunSnapshot {
     #[serde(default)]
     run_id: Option<String>,
     #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    processed_parts: Vec<u32>,
+    #[serde(default)]
     counts: TableQualityCounters,
+}
+
+#[derive(Debug)]
+struct NamedIngestRunSnapshot {
+    manifest_name: String,
+    snapshot: IngestRunSnapshot,
+}
+
+#[derive(Debug, Deserialize)]
+struct TargetSectionsManifest {
+    #[serde(default)]
+    target_count: Option<usize>,
+    targets: Vec<TargetSectionReference>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TargetSectionReference {
+    id: String,
+    part: u32,
 }
 
 pub fn run(args: ValidateArgs) -> Result<()> {
@@ -247,11 +315,18 @@ pub fn run(args: ValidateArgs) -> Result<()> {
 
     write_json_pretty(&gold_manifest_path, &gold_manifest)?;
 
+    let target_sections = load_target_sections_manifest(&manifest_dir)?;
+    let target_coverage =
+        build_target_coverage_report(&target_sections, &gold_manifest.gold_references);
+    let freshness = build_freshness_report(&manifest_dir, &target_sections)?;
+
     let checks = build_quality_checks(
         &connection,
         &gold_manifest.gold_references,
         &evaluations,
         &table_quality_scorecard,
+        &target_coverage,
+        &freshness,
     )?;
     let summary = summarize_checks(&checks);
     let hierarchy_metrics = build_hierarchy_metrics(&evaluations);
@@ -380,9 +455,36 @@ pub fn run(args: ValidateArgs) -> Result<()> {
                 .to_string(),
         );
     }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-020" && check.result == "failed")
+    {
+        recommendations.push(
+            "Ensure target_sections.json and target-linked gold rows stay in one-to-one alignment (no missing, duplicate, or unexpected target_id values)."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-021" && check.result == "failed")
+    {
+        recommendations.push(
+            "Resolve target-linked retrieval failures by correcting canonical references and expected node/anchor metadata for target-linked gold rows."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-022" && check.result == "failed")
+    {
+        recommendations.push(
+            "Run a single full-target ingest cycle for Parts 2, 6, 8, and 9 so freshness is consistent across all required target parts."
+                .to_string(),
+        );
+    }
 
     let report = QualityReport {
-        manifest_version: 1,
+        manifest_version: 2,
         run_id,
         generated_at: now_utc_string(),
         status: if summary.failed > 0 {
@@ -393,6 +495,8 @@ pub fn run(args: ValidateArgs) -> Result<()> {
             "passed".to_string()
         },
         summary,
+        target_coverage,
+        freshness,
         hierarchy_metrics,
         table_quality_scorecard,
         checks,
@@ -430,6 +534,235 @@ fn resolve_run_id(manifest_dir: &Path, fallback: &str) -> String {
     latest_ingest_run_id
         .or(run_state_run_id)
         .unwrap_or_else(|| fallback.to_string())
+}
+
+fn load_target_sections_manifest(manifest_dir: &Path) -> Result<Option<TargetSectionsManifest>> {
+    let target_sections_path = manifest_dir.join("target_sections.json");
+    if !target_sections_path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read(&target_sections_path)
+        .with_context(|| format!("failed to read {}", target_sections_path.display()))?;
+    let manifest: TargetSectionsManifest = serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to parse {}", target_sections_path.display()))?;
+
+    Ok(Some(manifest))
+}
+
+fn build_target_coverage_report(
+    target_sections: &Option<TargetSectionsManifest>,
+    refs: &[GoldReference],
+) -> TargetCoverageReport {
+    let Some(target_sections) = target_sections.as_ref() else {
+        return TargetCoverageReport {
+            source_manifest: None,
+            target_total: 0,
+            target_linked_gold_total: refs
+                .iter()
+                .filter(|reference| reference.target_id.is_some())
+                .count(),
+            covered_target_total: 0,
+            missing_target_ids: Vec::new(),
+            duplicate_target_ids: Vec::new(),
+            unexpected_target_ids: Vec::new(),
+        };
+    };
+
+    let target_ids = target_sections
+        .targets
+        .iter()
+        .map(|target| target.id.trim().to_string())
+        .collect::<Vec<String>>();
+    let target_lookup = target_ids.iter().cloned().collect::<HashSet<String>>();
+
+    let mut counts = HashMap::<String, usize>::new();
+    let mut unexpected_target_ids = Vec::<String>::new();
+
+    for reference in refs {
+        let Some(target_id) = reference.target_id.as_deref().map(str::trim) else {
+            continue;
+        };
+
+        if target_lookup.contains(target_id) {
+            *counts.entry(target_id.to_string()).or_insert(0) += 1;
+        } else {
+            unexpected_target_ids.push(target_id.to_string());
+        }
+    }
+
+    let mut missing_target_ids = Vec::<String>::new();
+    let mut duplicate_target_ids = Vec::<String>::new();
+    for target_id in &target_ids {
+        match counts.get(target_id).copied().unwrap_or(0) {
+            0 => missing_target_ids.push(target_id.clone()),
+            1 => {}
+            _ => duplicate_target_ids.push(target_id.clone()),
+        }
+    }
+
+    unexpected_target_ids.sort();
+    unexpected_target_ids.dedup();
+
+    let target_linked_gold_total = refs
+        .iter()
+        .filter(|reference| reference.target_id.is_some())
+        .count();
+
+    TargetCoverageReport {
+        source_manifest: Some("target_sections.json".to_string()),
+        target_total: target_sections.target_count.unwrap_or(target_ids.len()),
+        target_linked_gold_total,
+        covered_target_total: target_ids.len().saturating_sub(missing_target_ids.len()),
+        missing_target_ids,
+        duplicate_target_ids,
+        unexpected_target_ids,
+    }
+}
+
+fn build_freshness_report(
+    manifest_dir: &Path,
+    target_sections: &Option<TargetSectionsManifest>,
+) -> Result<FreshnessReport> {
+    let required_parts = target_sections
+        .as_ref()
+        .map(required_target_parts)
+        .unwrap_or_default();
+
+    let snapshots = load_ingest_snapshots(manifest_dir)?;
+    let latest = snapshots.last();
+
+    let latest_run_parts = latest
+        .map(|snapshot| resolve_processed_parts(&snapshot.snapshot, &required_parts))
+        .unwrap_or_default();
+
+    let stale_parts = required_parts
+        .iter()
+        .copied()
+        .filter(|part| !latest_run_parts.contains(part))
+        .collect::<Vec<u32>>();
+
+    let mut latest_run_by_part = Vec::<PartFreshness>::new();
+    for part in &required_parts {
+        let mut entry = PartFreshness {
+            part: *part,
+            manifest: None,
+            run_id: None,
+            started_at: None,
+        };
+
+        for snapshot in snapshots.iter().rev() {
+            let processed_parts = resolve_processed_parts(&snapshot.snapshot, &required_parts);
+            if processed_parts.contains(part) {
+                entry.manifest = Some(snapshot.manifest_name.clone());
+                entry.run_id = snapshot.snapshot.run_id.clone();
+                entry.started_at = snapshot.snapshot.started_at.clone();
+                break;
+            }
+        }
+
+        latest_run_by_part.push(entry);
+    }
+
+    let full_target_cycle_run_id = snapshots.iter().rev().find_map(|snapshot| {
+        let processed_parts = resolve_processed_parts(&snapshot.snapshot, &required_parts);
+        let all_parts_present = required_parts
+            .iter()
+            .all(|required| processed_parts.contains(required));
+        if all_parts_present {
+            snapshot.snapshot.run_id.clone()
+        } else {
+            None
+        }
+    });
+
+    Ok(FreshnessReport {
+        source_manifest_dir: manifest_dir.display().to_string(),
+        required_parts,
+        latest_manifest: latest.map(|snapshot| snapshot.manifest_name.clone()),
+        latest_run_id: latest.and_then(|snapshot| snapshot.snapshot.run_id.clone()),
+        latest_started_at: latest.and_then(|snapshot| snapshot.snapshot.started_at.clone()),
+        latest_run_parts,
+        latest_run_by_part,
+        full_target_cycle_run_id,
+        stale_parts,
+    })
+}
+
+fn required_target_parts(manifest: &TargetSectionsManifest) -> Vec<u32> {
+    let mut parts = manifest
+        .targets
+        .iter()
+        .map(|target| target.part)
+        .collect::<Vec<u32>>();
+    parts.sort_unstable();
+    parts.dedup();
+    parts
+}
+
+fn load_ingest_snapshots(manifest_dir: &Path) -> Result<Vec<NamedIngestRunSnapshot>> {
+    let mut snapshots = Vec::<NamedIngestRunSnapshot>::new();
+
+    for entry in fs::read_dir(manifest_dir)? {
+        let entry = entry?;
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !file_name.starts_with("ingest_run_") || !file_name.ends_with(".json") {
+            continue;
+        }
+
+        let manifest_path = entry.path();
+        let raw = fs::read(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+        let snapshot: IngestRunSnapshot = serde_json::from_slice(&raw)
+            .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+
+        snapshots.push(NamedIngestRunSnapshot {
+            manifest_name: file_name,
+            snapshot,
+        });
+    }
+
+    snapshots.sort_by(|left, right| left.manifest_name.cmp(&right.manifest_name));
+    Ok(snapshots)
+}
+
+fn resolve_processed_parts(snapshot: &IngestRunSnapshot, required_parts: &[u32]) -> Vec<u32> {
+    let mut processed_parts = if !snapshot.processed_parts.is_empty() {
+        snapshot.processed_parts.clone()
+    } else {
+        parse_target_parts_from_command(snapshot.command.as_deref().unwrap_or(""))
+    };
+
+    if processed_parts.is_empty() {
+        processed_parts = required_parts.to_vec();
+    }
+
+    processed_parts.sort_unstable();
+    processed_parts.dedup();
+    processed_parts
+}
+
+fn parse_target_parts_from_command(command: &str) -> Vec<u32> {
+    let mut parts = Vec::<u32>::new();
+    let mut tokens = command.split_whitespace().peekable();
+
+    while let Some(token) = tokens.next() {
+        if token != "--target-part" {
+            continue;
+        }
+
+        let Some(value) = tokens.next() else {
+            continue;
+        };
+
+        if let Ok(parsed) = value.parse::<u32>() {
+            parts.push(parsed);
+        }
+    }
+
+    parts.sort_unstable();
+    parts.dedup();
+    parts
 }
 
 fn load_latest_ingest_run_id(manifest_dir: &Path) -> Result<Option<String>> {
@@ -621,18 +954,18 @@ fn evaluate_reference(
             .query_row(
                 "
                 SELECT
-                  type,
+                  node_type,
                   page_pdf_start,
                   page_pdf_end,
                   source_hash,
                   text,
-                  origin_node_id,
-                  leaf_node_type,
+                  node_id,
+                  node_type,
                   ancestor_path,
                   anchor_type,
                   anchor_label_norm
-                FROM chunks
-                WHERE doc_id = ?1 AND lower(ref) LIKE '%' || lower(?2) || '%'
+                FROM nodes
+                WHERE doc_id = ?1 AND lower(ref) = lower(?2)
                 ORDER BY page_pdf_start
                 LIMIT 1
                 ",
@@ -660,18 +993,18 @@ fn evaluate_reference(
             .query_row(
                 "
                 SELECT
-                  node_type,
+                  type,
                   page_pdf_start,
                   page_pdf_end,
                   source_hash,
                   text,
-                  node_id,
-                  node_type,
+                  origin_node_id,
+                  leaf_node_type,
                   ancestor_path,
                   anchor_type,
                   anchor_label_norm
-                FROM nodes
-                WHERE doc_id = ?1 AND lower(ref) = lower(?2)
+                FROM chunks
+                WHERE doc_id = ?1 AND lower(ref) LIKE '%' || lower(?2) || '%'
                 ORDER BY page_pdf_start
                 LIMIT 1
                 ",
@@ -839,6 +1172,8 @@ fn build_quality_checks(
     refs: &[GoldReference],
     evals: &[ReferenceEvaluation],
     table_quality: &TableQualityScorecard,
+    target_coverage: &TargetCoverageReport,
+    freshness: &FreshnessReport,
 ) -> Result<Vec<QualityCheck>> {
     let evaluable = refs
         .iter()
@@ -1222,6 +1557,65 @@ fn build_quality_checks(
         check_id: "Q-019".to_string(),
         name: "ASIL table row/cell alignment checks".to_string(),
         result: evaluate_asil_table_alignment(&asil_alignment).to_string(),
+    });
+
+    checks.push(QualityCheck {
+        check_id: "Q-020".to_string(),
+        name: "Target register coverage completeness".to_string(),
+        result: if target_coverage.target_total == 0 {
+            "pending"
+        } else if target_coverage.missing_target_ids.is_empty()
+            && target_coverage.duplicate_target_ids.is_empty()
+            && target_coverage.unexpected_target_ids.is_empty()
+            && target_coverage.covered_target_total == target_coverage.target_total
+        {
+            "pass"
+        } else {
+            "failed"
+        }
+        .to_string(),
+    });
+
+    let target_linked_total = refs
+        .iter()
+        .zip(evals.iter())
+        .filter(|(reference, _)| reference.target_id.is_some())
+        .count();
+    let target_linked_ok = refs
+        .iter()
+        .zip(evals.iter())
+        .filter(|(reference, eval)| {
+            reference.target_id.is_some()
+                && !eval.skipped
+                && eval.found
+                && eval.has_all_terms
+                && eval.hierarchy_ok
+        })
+        .count();
+    checks.push(QualityCheck {
+        check_id: "Q-021".to_string(),
+        name: "Target-linked references retrievable".to_string(),
+        result: if target_linked_total == 0 {
+            "pending"
+        } else if target_linked_total == target_linked_ok {
+            "pass"
+        } else {
+            "failed"
+        }
+        .to_string(),
+    });
+
+    checks.push(QualityCheck {
+        check_id: "Q-022".to_string(),
+        name: "Target-part freshness completeness".to_string(),
+        result: if freshness.required_parts.is_empty() {
+            "pending"
+        } else if freshness.stale_parts.is_empty() {
+            "pass"
+        } else {
+            "failed"
+        }
+        .to_string(),
     });
 
     Ok(checks)
@@ -1735,5 +2129,48 @@ fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
         (Some(start), None) => start.to_string(),
         (None, Some(end)) => end.to_string(),
         (None, None) => "unknown".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GoldReference, IngestRunSnapshot, parse_target_parts_from_command, resolve_processed_parts,
+    };
+
+    #[test]
+    fn gold_reference_deserializes_without_wp1_optional_fields() {
+        let raw = r#"
+        {
+          "id": "G-legacy",
+          "doc_id": "ISO26262-6-2018",
+          "ref": "8.4.5",
+          "expected_page_pattern": "26-27",
+          "must_match_terms": ["source code"],
+          "status": "pass"
+        }
+        "#;
+
+        let reference: GoldReference =
+            serde_json::from_str(raw).expect("legacy gold row should deserialize");
+        assert_eq!(reference.reference, "8.4.5");
+        assert!(reference.target_id.is_none());
+        assert!(reference.target_ref_raw.is_none());
+        assert!(reference.canonical_ref.is_none());
+        assert!(reference.ref_resolution_mode.is_none());
+    }
+
+    #[test]
+    fn parse_target_parts_from_command_extracts_and_deduplicates_values() {
+        let command = "iso26262 ingest --cache-root .cache/iso26262 --target-part 8 --target-part 2 --target-part 8";
+        let parts = parse_target_parts_from_command(command);
+        assert_eq!(parts, vec![2, 8]);
+    }
+
+    #[test]
+    fn resolve_processed_parts_falls_back_to_required_parts_when_missing() {
+        let snapshot = IngestRunSnapshot::default();
+        let parts = resolve_processed_parts(&snapshot, &[2, 6, 8, 9]);
+        assert_eq!(parts, vec![2, 6, 8, 9]);
     }
 }

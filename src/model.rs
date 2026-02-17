@@ -114,6 +114,7 @@ pub struct IngestRunManifest {
     pub command: String,
     pub tool_versions: ToolVersions,
     pub paths: IngestPaths,
+    pub processed_parts: Vec<u32>,
     pub counts: IngestCounts,
     pub source_hashes: Vec<PdfEntry>,
     pub warnings: Vec<String>,
