@@ -115,6 +115,8 @@ pub fn run(args: IngestArgs) -> Result<()> {
             table_cell_nodes_inserted: chunk_stats.table_cell_nodes_inserted,
             list_nodes_inserted: chunk_stats.list_nodes_inserted,
             list_item_nodes_inserted: chunk_stats.list_item_nodes_inserted,
+            note_nodes_inserted: chunk_stats.note_nodes_inserted,
+            note_item_nodes_inserted: chunk_stats.note_item_nodes_inserted,
             paragraph_nodes_inserted: chunk_stats.paragraph_nodes_inserted,
             requirement_atom_nodes_inserted: chunk_stats.requirement_atom_nodes_inserted,
             table_raw_fallback_count: chunk_stats.table_raw_fallback_count,
@@ -388,6 +390,8 @@ struct ChunkInsertStats {
     table_cell_nodes_inserted: usize,
     list_nodes_inserted: usize,
     list_item_nodes_inserted: usize,
+    note_nodes_inserted: usize,
+    note_item_nodes_inserted: usize,
     paragraph_nodes_inserted: usize,
     requirement_atom_nodes_inserted: usize,
     table_raw_fallback_count: usize,
@@ -442,6 +446,8 @@ enum NodeType {
     TableCell,
     List,
     ListItem,
+    Note,
+    NoteItem,
     RequirementAtom,
     Page,
 }
@@ -460,6 +466,8 @@ impl NodeType {
             NodeType::TableCell => "table_cell",
             NodeType::List => "list",
             NodeType::ListItem => "list_item",
+            NodeType::Note => "note",
+            NodeType::NoteItem => "note_item",
             NodeType::RequirementAtom => "requirement_atom",
             NodeType::Page => "page",
         }
@@ -491,6 +499,13 @@ struct ListItemDraft {
     marker_norm: String,
     text: String,
     depth: i64,
+}
+
+#[derive(Debug)]
+struct NoteItemDraft {
+    marker: String,
+    marker_norm: String,
+    text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -636,9 +651,11 @@ fn insert_chunks(
     let tx = connection.transaction()?;
     let mut stats = ChunkInsertStats::default();
     let list_item_regex = Regex::new(
-        r"^(?P<marker>(?:NOTE(?:\s+\d+)?|(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
+        r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
     )
     .context("failed to compile list item regex")?;
+    let note_item_regex = Regex::new(r"^(?i)(?P<marker>NOTE(?:\s+\d+)?)(?:\s+(?P<body>.+))?$")
+        .context("failed to compile note item regex")?;
     let table_cell_split_regex =
         Regex::new(r"\t+|\s{2,}").context("failed to compile table cell split regex")?;
     let requirement_split_regex =
@@ -1029,8 +1046,12 @@ fn insert_chunks(
                     origin_node_type,
                     NodeType::Clause | NodeType::Subclause | NodeType::Annex
                 ) {
-                    let paragraphs =
-                        parse_paragraphs(&chunk.text, &chunk.heading, &list_item_regex);
+                    let paragraphs = parse_paragraphs(
+                        &chunk.text,
+                        &chunk.heading,
+                        &list_item_regex,
+                        &note_item_regex,
+                    );
                     if !paragraphs.is_empty() {
                         insert_paragraph_nodes(
                             &mut node_statement,
@@ -1047,8 +1068,34 @@ fn insert_chunks(
                         )?;
                     }
 
-                    let (list_items, list_fallback) =
-                        parse_list_items(&chunk.text, &chunk.heading, &list_item_regex);
+                    let note_items = parse_note_items(
+                        &chunk.text,
+                        &chunk.heading,
+                        &note_item_regex,
+                        &list_item_regex,
+                    );
+                    if !note_items.is_empty() {
+                        insert_note_nodes(
+                            &mut node_statement,
+                            &doc_id,
+                            &origin_node_id,
+                            &ancestor_path,
+                            &chunk.reference,
+                            &note_items,
+                            chunk.page_start,
+                            chunk.page_end,
+                            &pdf.sha256,
+                            &mut node_order_index,
+                            &mut stats,
+                        )?;
+                    }
+
+                    let (list_items, list_fallback) = parse_list_items(
+                        &chunk.text,
+                        &chunk.heading,
+                        &list_item_regex,
+                        &note_item_regex,
+                    );
                     if !list_items.is_empty() {
                         insert_list_nodes(
                             &mut node_statement,
@@ -1182,6 +1229,8 @@ fn increment_node_type_stat(stats: &mut ChunkInsertStats, node_type: NodeType) {
         NodeType::TableCell => stats.table_cell_nodes_inserted += 1,
         NodeType::List => stats.list_nodes_inserted += 1,
         NodeType::ListItem => stats.list_item_nodes_inserted += 1,
+        NodeType::Note => stats.note_nodes_inserted += 1,
+        NodeType::NoteItem => stats.note_item_nodes_inserted += 1,
         NodeType::RequirementAtom => stats.requirement_atom_nodes_inserted += 1,
         NodeType::Document | NodeType::Page => {}
     }
@@ -1823,7 +1872,12 @@ fn escape_csv_cell(value: &str) -> String {
     }
 }
 
-fn parse_paragraphs(text: &str, heading: &str, list_item_regex: &Regex) -> Vec<String> {
+fn parse_paragraphs(
+    text: &str,
+    heading: &str,
+    list_item_regex: &Regex,
+    note_item_regex: &Regex,
+) -> Vec<String> {
     let body_lines = extract_body_lines(text, heading);
     let mut paragraphs = Vec::<String>::new();
     let mut current = String::new();
@@ -1847,7 +1901,7 @@ fn parse_paragraphs(text: &str, heading: &str, list_item_regex: &Regex) -> Vec<S
             continue;
         }
 
-        let starts_new_marker = list_item_regex.is_match(line) || line.starts_with("NOTE");
+        let starts_new_marker = list_item_regex.is_match(line) || note_item_regex.is_match(line);
         let previous_ends_sentence = current.ends_with('.') || current.ends_with(';');
         let starts_with_lowercase = line
             .chars()
@@ -1936,6 +1990,7 @@ fn parse_list_items(
     text: &str,
     heading: &str,
     list_item_regex: &Regex,
+    note_item_regex: &Regex,
 ) -> (Vec<ListItemDraft>, bool) {
     let body_lines = extract_body_lines(text, heading);
     let mut items = Vec::<ListItemDraft>::new();
@@ -1952,11 +2007,14 @@ fn parse_list_items(
             continue;
         }
 
-        if list_item_regex.is_match(line) {
+        let list_capture = list_item_regex.captures(line);
+        let note_capture = note_item_regex.captures(line);
+
+        if list_capture.is_some() || note_capture.is_some() {
             list_like_lines += 1;
         }
 
-        if let Some(captures) = list_item_regex.captures(line) {
+        if let Some(captures) = list_capture {
             if let Some(item) = active_item.take() {
                 if !item.text.trim().is_empty() {
                     items.push(item);
@@ -1982,6 +2040,15 @@ fn parse_list_items(
             continue;
         }
 
+        if note_capture.is_some() {
+            if let Some(item) = active_item.take() {
+                if !item.text.trim().is_empty() {
+                    items.push(item);
+                }
+            }
+            continue;
+        }
+
         if let Some(item) = active_item.as_mut() {
             if !item.text.is_empty() {
                 item.text.push(' ');
@@ -2000,6 +2067,77 @@ fn parse_list_items(
 
     let used_fallback = list_like_lines > 0 && items.is_empty();
     (items, used_fallback)
+}
+
+fn parse_note_items(
+    text: &str,
+    heading: &str,
+    note_item_regex: &Regex,
+    list_item_regex: &Regex,
+) -> Vec<NoteItemDraft> {
+    let body_lines = extract_body_lines(text, heading);
+    let mut items = Vec::<NoteItemDraft>::new();
+    let mut active_item: Option<NoteItemDraft> = None;
+
+    for raw_line in body_lines {
+        if line_is_noise(raw_line) {
+            continue;
+        }
+
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(captures) = note_item_regex.captures(line) {
+            if let Some(item) = active_item.take() {
+                if !item.text.trim().is_empty() {
+                    items.push(item);
+                }
+            }
+
+            let marker = captures
+                .name("marker")
+                .map(|value| value.as_str().to_string())
+                .unwrap_or_else(|| "NOTE".to_string());
+            let marker_norm = normalize_marker_label(&marker);
+            let body = captures
+                .name("body")
+                .map(|value| value.as_str().trim().to_string())
+                .unwrap_or_default();
+
+            active_item = Some(NoteItemDraft {
+                marker,
+                marker_norm,
+                text: body,
+            });
+            continue;
+        }
+
+        if list_item_regex.is_match(line) {
+            if let Some(item) = active_item.take() {
+                if !item.text.trim().is_empty() {
+                    items.push(item);
+                }
+            }
+            continue;
+        }
+
+        if let Some(item) = active_item.as_mut() {
+            if !item.text.is_empty() {
+                item.text.push(' ');
+            }
+            item.text.push_str(line);
+        }
+    }
+
+    if let Some(item) = active_item.take() {
+        if !item.text.trim().is_empty() {
+            items.push(item);
+        }
+    }
+
+    items
 }
 
 fn reorder_list_items_for_marker_sequence(items: &mut Vec<ListItemDraft>) {
@@ -2148,6 +2286,95 @@ fn insert_list_nodes(
         stats.nodes_total += 1;
         increment_node_type_stat(stats, NodeType::ListItem);
         let _ = item.depth;
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_note_nodes(
+    node_statement: &mut rusqlite::Statement<'_>,
+    doc_id: &str,
+    parent_node_id: &str,
+    parent_path: &str,
+    reference: &str,
+    note_items: &[NoteItemDraft],
+    page_start: i64,
+    page_end: i64,
+    source_hash: &str,
+    node_order_index: &mut i64,
+    stats: &mut ChunkInsertStats,
+) -> Result<()> {
+    let note_node_id = format!("{}:note:001", parent_node_id);
+    let note_ref = format!("{} note", reference);
+    let note_heading = format!("{} note", reference);
+    let note_path = format!("{} > note:{}", parent_path, reference);
+
+    insert_node(
+        node_statement,
+        &note_node_id,
+        Some(parent_node_id),
+        doc_id,
+        NodeType::Note,
+        Some(&note_ref),
+        Some(&note_ref),
+        Some(&note_heading),
+        *node_order_index,
+        Some(page_start),
+        Some(page_end),
+        None,
+        source_hash,
+        &note_path,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?;
+
+    *node_order_index += 1;
+    stats.nodes_total += 1;
+    increment_node_type_stat(stats, NodeType::Note);
+
+    for (item_idx, item) in note_items.iter().enumerate() {
+        let note_item_node_id = format!("{}:item:{:03}", note_node_id, item_idx + 1);
+        let note_item_ref = format!("{} note {}", reference, item_idx + 1);
+        let note_item_heading = format!("{} {}", item.marker, item.text);
+        let note_item_path = format!("{} > note_item:{}", note_path, item_idx + 1);
+        let marker_order = (item_idx + 1) as i64;
+        let marker_anchor_id = build_citation_anchor_id(
+            doc_id,
+            reference,
+            "marker",
+            Some(&item.marker_norm),
+            Some(marker_order),
+        );
+
+        insert_node(
+            node_statement,
+            &note_item_node_id,
+            Some(&note_node_id),
+            doc_id,
+            NodeType::NoteItem,
+            Some(&note_item_ref),
+            Some(&note_item_ref),
+            Some(&note_item_heading),
+            *node_order_index,
+            Some(page_start),
+            Some(page_end),
+            Some(&item.text),
+            source_hash,
+            &note_item_path,
+            Some("marker"),
+            Some(&item.marker),
+            Some(&item.marker_norm),
+            Some(marker_order),
+            Some(&marker_anchor_id),
+        )?;
+
+        *node_order_index += 1;
+        stats.nodes_total += 1;
+        increment_node_type_stat(stats, NodeType::NoteItem);
     }
 
     Ok(())

@@ -68,6 +68,8 @@ pub struct IngestCounts {
     pub table_cell_nodes_inserted: usize,
     pub list_nodes_inserted: usize,
     pub list_item_nodes_inserted: usize,
+    pub note_nodes_inserted: usize,
+    pub note_item_nodes_inserted: usize,
     pub paragraph_nodes_inserted: usize,
     pub requirement_atom_nodes_inserted: usize,
     pub table_raw_fallback_count: usize,
