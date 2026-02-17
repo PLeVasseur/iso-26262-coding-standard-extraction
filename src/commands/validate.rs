@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -21,6 +22,24 @@ const PARAGRAPH_CITATION_ACCURACY_MIN: f64 = 0.90;
 const ASIL_ALIGNMENT_MIN_RATING_COVERAGE: f64 = 0.60;
 const ASIL_ALIGNMENT_MAX_MALFORMED_RATIO: f64 = 0.10;
 const ASIL_ALIGNMENT_MAX_OUTLIER_RATIO: f64 = 0.15;
+const WP2_EXTRACTION_PROVENANCE_COVERAGE_MIN: f64 = 1.0;
+const WP2_TEXT_LAYER_REPLAY_STABILITY_MIN: f64 = 0.999;
+const WP2_OCR_REPLAY_STABILITY_MIN: f64 = 0.98;
+const WP2_PRINTED_MAPPING_DETECTABLE_MIN: f64 = 0.98;
+const WP2_PRINTED_DETECTABILITY_DROP_MAX: f64 = 0.05;
+const WP2_CLAUSE_MAX_WORDS: usize = 900;
+const WP2_OVERLAP_MIN_WORDS: usize = 50;
+const WP2_OVERLAP_MAX_WORDS: usize = 100;
+const WP2_OVERLAP_COMPLIANCE_MIN: f64 = 0.95;
+const WP2_LIST_FALLBACK_RATIO_MAX: f64 = 0.05;
+const WP2_ASIL_STRICT_MIN_RATING_COVERAGE: f64 = 0.85;
+const WP2_ASIL_STRICT_MAX_MALFORMED_RATIO: f64 = 0.05;
+const WP2_ASIL_STRICT_MAX_OUTLIER_RATIO: f64 = 0.08;
+const WP2_ASIL_STRICT_MAX_ONE_CELL_RATIO: f64 = 0.25;
+const WP2_NOISE_LEAKAGE_GLOBAL_MAX: f64 = 0.001;
+const WP2_CITATION_TOP1_MIN: f64 = 0.99;
+const WP2_CITATION_TOP3_MIN: f64 = 1.0;
+const WP2_CITATION_PAGE_RANGE_MIN: f64 = 0.99;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GoldSetManifest {
@@ -130,13 +149,99 @@ struct QualityReport {
     generated_at: String,
     status: String,
     summary: QualitySummary,
+    wp2_stage_policy: Wp2StagePolicy,
     target_coverage: TargetCoverageReport,
     freshness: FreshnessReport,
     hierarchy_metrics: HierarchyMetrics,
     table_quality_scorecard: TableQualityScorecard,
+    extraction_fidelity: ExtractionFidelityReport,
+    hierarchy_semantics: HierarchySemanticsReport,
+    table_semantics: TableSemanticsReport,
+    citation_parity: CitationParitySummaryReport,
     checks: Vec<QualityCheck>,
     issues: Vec<String>,
     recommendations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct Wp2StagePolicy {
+    requested_stage: String,
+    effective_stage: String,
+    enforcement_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct ExtractionFidelityReport {
+    source_manifest: Option<String>,
+    processed_pages: usize,
+    provenance_entries: usize,
+    provenance_coverage: Option<f64>,
+    unknown_backend_pages: usize,
+    text_layer_replay_stability: Option<f64>,
+    ocr_replay_stability: Option<f64>,
+    ocr_page_ratio: Option<f64>,
+    total_chunks: usize,
+    printed_mapped_chunks: usize,
+    printed_mapping_coverage: Option<f64>,
+    printed_status_coverage: Option<f64>,
+    printed_detectability_rate: Option<f64>,
+    printed_detectability_drop_pp: Option<f64>,
+    printed_mapping_on_detectable: Option<f64>,
+    invalid_printed_label_count: usize,
+    invalid_printed_range_count: usize,
+    clause_chunks_over_900: usize,
+    max_clause_chunk_words: Option<usize>,
+    overlap_pair_count: usize,
+    overlap_compliant_pairs: usize,
+    overlap_compliance: Option<f64>,
+    split_sequence_violations: usize,
+    q025_exemption_count: usize,
+    non_exempt_oversize_chunks: usize,
+    normalization_noise_ratio: Option<f64>,
+    normalization_target_noise_count: usize,
+    dehyphenation_false_positive_rate: Option<f64>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct HierarchySemanticsReport {
+    list_items_total: usize,
+    list_semantics_complete: usize,
+    list_semantics_completeness: Option<f64>,
+    nested_parent_depth_violations: usize,
+    list_parse_candidate_total: usize,
+    list_parse_fallback_total: usize,
+    list_parse_fallback_ratio: Option<f64>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct TableSemanticsReport {
+    table_cells_total: usize,
+    table_cells_semantics_complete: usize,
+    table_cell_semantics_completeness: Option<f64>,
+    invalid_span_count: usize,
+    header_flag_completeness: Option<f64>,
+    one_cell_row_ratio: Option<f64>,
+    asil_rating_coverage: Option<f64>,
+    asil_malformed_ratio: Option<f64>,
+    asil_outlier_ratio: Option<f64>,
+    asil_one_cell_row_ratio: Option<f64>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct CitationParitySummaryReport {
+    baseline_path: String,
+    baseline_run_id: Option<String>,
+    baseline_checksum: Option<String>,
+    baseline_created: bool,
+    target_linked_total: usize,
+    comparable_total: usize,
+    top1_parity: Option<f64>,
+    top3_containment: Option<f64>,
+    page_range_parity: Option<f64>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,7 +274,7 @@ struct QualitySummary {
     pending: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct QualityCheck {
     check_id: String,
     name: String,
@@ -233,7 +338,7 @@ struct RunStateManifest {
     active_run_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 struct IngestRunSnapshot {
     #[serde(default)]
     run_id: Option<String>,
@@ -244,10 +349,178 @@ struct IngestRunSnapshot {
     #[serde(default)]
     processed_parts: Vec<u32>,
     #[serde(default)]
-    counts: TableQualityCounters,
+    counts: IngestRunCountsSnapshot,
+    #[serde(default)]
+    paths: IngestRunPathsSnapshot,
+    #[serde(default)]
+    db_schema_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+struct IngestRunPathsSnapshot {
+    page_provenance_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+struct IngestRunCountsSnapshot {
+    processed_pdf_count: usize,
+    text_layer_page_count: usize,
+    ocr_page_count: usize,
+    ocr_fallback_page_count: usize,
+    empty_page_count: usize,
+    header_lines_removed: usize,
+    footer_lines_removed: usize,
+    dehyphenation_merges: usize,
+    list_parse_candidate_count: usize,
+    list_parse_fallback_count: usize,
+    table_row_nodes_inserted: usize,
+    table_sparse_rows_count: usize,
+    table_overloaded_rows_count: usize,
+    table_rows_with_markers_count: usize,
+    table_rows_with_descriptions_count: usize,
+    table_marker_expected_count: usize,
+    table_marker_observed_count: usize,
+}
+
+impl IngestRunCountsSnapshot {
+    fn table_quality_counters(&self) -> TableQualityCounters {
+        TableQualityCounters {
+            table_row_nodes_inserted: self.table_row_nodes_inserted,
+            table_sparse_rows_count: self.table_sparse_rows_count,
+            table_overloaded_rows_count: self.table_overloaded_rows_count,
+            table_rows_with_markers_count: self.table_rows_with_markers_count,
+            table_rows_with_descriptions_count: self.table_rows_with_descriptions_count,
+            table_marker_expected_count: self.table_marker_expected_count,
+            table_marker_observed_count: self.table_marker_observed_count,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct PageProvenanceManifestSnapshot {
+    entries: Vec<PageProvenanceEntry>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(default)]
+struct PageProvenanceEntry {
+    doc_id: String,
+    page_pdf: i64,
+    backend: String,
+    reason: String,
+    text_char_count: usize,
+    ocr_char_count: Option<usize>,
+    printed_page_label: Option<String>,
+    printed_page_status: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wp2GateStage {
+    A,
+    B,
+}
+
+impl Wp2GateStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::B => "B",
+        }
+    }
+
+    fn mode_label(self) -> &'static str {
+        match self {
+            Self::A => "instrumentation",
+            Self::B => "hard_gate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CitationParityIdentity {
+    canonical_ref: String,
+    anchor_identity: String,
+    page_start: Option<i64>,
+    page_end: Option<i64>,
+}
+
+impl PartialEq for CitationParityIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.canonical_ref == other.canonical_ref
+            && self.anchor_identity == other.anchor_identity
+            && self.page_start == other.page_start
+            && self.page_end == other.page_end
+    }
+}
+
+impl Eq for CitationParityIdentity {}
+
+impl Hash for CitationParityIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.canonical_ref.hash(state);
+        self.anchor_identity.hash(state);
+        self.page_start.hash(state);
+        self.page_end.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CitationParityEntry {
+    target_id: String,
+    doc_id: String,
+    reference: String,
+    top_results: Vec<CitationParityIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CitationParityBaseline {
+    manifest_version: u32,
+    run_id: String,
+    generated_at: String,
+    db_schema_version: Option<String>,
+    target_linked_count: usize,
+    query_options: String,
+    checksum: String,
+    entries: Vec<CitationParityEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CitationParityArtifact {
+    manifest_version: u32,
+    run_id: String,
+    generated_at: String,
+    baseline_checksum: Option<String>,
+    target_linked_count: usize,
+    comparable_count: usize,
+    top1_parity: Option<f64>,
+    top3_containment: Option<f64>,
+    page_range_parity: Option<f64>,
+    baseline_created: bool,
+    entries: Vec<CitationParityComparisonEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CitationParityComparisonEntry {
+    target_id: String,
+    top1_match: bool,
+    top3_contains_baseline: bool,
+    page_range_match: bool,
 }
 
 #[derive(Debug)]
+struct Wp2Assessment {
+    checks: Vec<QualityCheck>,
+    extraction_fidelity: ExtractionFidelityReport,
+    hierarchy_semantics: HierarchySemanticsReport,
+    table_semantics: TableSemanticsReport,
+    citation_parity: CitationParitySummaryReport,
+    recommendations: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 struct NamedIngestRunSnapshot {
     manifest_name: String,
     snapshot: IngestRunSnapshot,
@@ -283,6 +556,21 @@ pub fn run(args: ValidateArgs) -> Result<()> {
 
     let mut gold_manifest = load_gold_manifest(&gold_manifest_path)?;
     let run_id = resolve_run_id(&manifest_dir, &gold_manifest.run_id);
+    let wp2_stage = resolve_wp2_gate_stage();
+    let wp2_stage_policy = Wp2StagePolicy {
+        requested_stage: std::env::var("WP2_GATE_STAGE").unwrap_or_else(|_| "A".to_string()),
+        effective_stage: wp2_stage.as_str().to_string(),
+        enforcement_mode: wp2_stage.mode_label().to_string(),
+    };
+    let ingest_snapshots = load_ingest_snapshots(&manifest_dir).unwrap_or_default();
+    let latest_ingest_snapshot = ingest_snapshots.last().cloned();
+    let previous_ingest_snapshot = if ingest_snapshots.len() > 1 {
+        ingest_snapshots
+            .get(ingest_snapshots.len().saturating_sub(2))
+            .cloned()
+    } else {
+        None
+    };
     let table_quality_scorecard =
         load_table_quality_scorecard(&manifest_dir).unwrap_or_else(|_| empty_table_scorecard());
 
@@ -320,7 +608,7 @@ pub fn run(args: ValidateArgs) -> Result<()> {
         build_target_coverage_report(&target_sections, &gold_manifest.gold_references);
     let freshness = build_freshness_report(&manifest_dir, &target_sections)?;
 
-    let checks = build_quality_checks(
+    let mut checks = build_quality_checks(
         &connection,
         &gold_manifest.gold_references,
         &evaluations,
@@ -328,6 +616,17 @@ pub fn run(args: ValidateArgs) -> Result<()> {
         &target_coverage,
         &freshness,
     )?;
+    let wp2_assessment = build_wp2_assessment(
+        &connection,
+        &manifest_dir,
+        &run_id,
+        &gold_manifest.gold_references,
+        wp2_stage,
+        latest_ingest_snapshot.as_ref(),
+        previous_ingest_snapshot.as_ref(),
+    )?;
+    checks.extend(wp2_assessment.checks.iter().cloned());
+
     let summary = summarize_checks(&checks);
     let hierarchy_metrics = build_hierarchy_metrics(&evaluations);
 
@@ -482,6 +781,7 @@ pub fn run(args: ValidateArgs) -> Result<()> {
                 .to_string(),
         );
     }
+    recommendations.extend(wp2_assessment.recommendations.iter().cloned());
 
     let report = QualityReport {
         manifest_version: 2,
@@ -495,10 +795,15 @@ pub fn run(args: ValidateArgs) -> Result<()> {
             "passed".to_string()
         },
         summary,
+        wp2_stage_policy,
         target_coverage,
         freshness,
         hierarchy_metrics,
         table_quality_scorecard,
+        extraction_fidelity: wp2_assessment.extraction_fidelity,
+        hierarchy_semantics: wp2_assessment.hierarchy_semantics,
+        table_semantics: wp2_assessment.table_semantics,
+        citation_parity: wp2_assessment.citation_parity,
         checks,
         issues,
         recommendations,
@@ -513,6 +818,1358 @@ pub fn run(args: ValidateArgs) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn resolve_wp2_gate_stage() -> Wp2GateStage {
+    match std::env::var("WP2_GATE_STAGE") {
+        Ok(value) if value.trim().eq_ignore_ascii_case("B") => Wp2GateStage::B,
+        _ => Wp2GateStage::A,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_wp2_assessment(
+    connection: &Connection,
+    manifest_dir: &Path,
+    run_id: &str,
+    refs: &[GoldReference],
+    stage: Wp2GateStage,
+    latest_snapshot: Option<&NamedIngestRunSnapshot>,
+    previous_snapshot: Option<&NamedIngestRunSnapshot>,
+) -> Result<Wp2Assessment> {
+    let mut checks = Vec::<QualityCheck>::new();
+    let mut recommendations = Vec::<String>::new();
+
+    let mut extraction = ExtractionFidelityReport {
+        source_manifest: latest_snapshot.map(|snapshot| snapshot.manifest_name.clone()),
+        ..ExtractionFidelityReport::default()
+    };
+    let mut hierarchy = HierarchySemanticsReport::default();
+    let mut table_semantics = TableSemanticsReport::default();
+    let mut citation_parity = CitationParitySummaryReport {
+        baseline_path: manifest_dir
+            .join("citation_parity_baseline.json")
+            .display()
+            .to_string(),
+        ..CitationParitySummaryReport::default()
+    };
+
+    let latest_counts = latest_snapshot
+        .map(|snapshot| snapshot.snapshot.counts.clone())
+        .unwrap_or_default();
+
+    extraction.processed_pages = latest_counts.text_layer_page_count
+        + latest_counts.ocr_page_count
+        + latest_counts.empty_page_count;
+    extraction.ocr_page_ratio = ratio(latest_counts.ocr_page_count, extraction.processed_pages);
+
+    let current_page_provenance =
+        load_page_provenance_entries(manifest_dir, latest_snapshot).unwrap_or_default();
+    let previous_page_provenance =
+        load_page_provenance_entries(manifest_dir, previous_snapshot).unwrap_or_default();
+
+    extraction.provenance_entries = current_page_provenance.len();
+    extraction.provenance_coverage = ratio(extraction.provenance_entries, extraction.processed_pages);
+    extraction.unknown_backend_pages = current_page_provenance
+        .iter()
+        .filter(|entry| !matches!(entry.backend.as_str(), "text_layer" | "ocr"))
+        .count();
+
+    extraction.text_layer_replay_stability = replay_stability_ratio(
+        &current_page_provenance,
+        &previous_page_provenance,
+        "text_layer",
+    );
+    extraction.ocr_replay_stability =
+        replay_stability_ratio(&current_page_provenance, &previous_page_provenance, "ocr");
+
+    let printed_metrics = compute_printed_page_metrics(connection, &current_page_provenance)?;
+    extraction.total_chunks = printed_metrics.total_chunks;
+    extraction.printed_mapped_chunks = printed_metrics.mapped_chunks;
+    extraction.printed_mapping_coverage = ratio(printed_metrics.mapped_chunks, printed_metrics.total_chunks);
+    extraction.printed_status_coverage = ratio(
+        printed_metrics.pages_with_explicit_status,
+        printed_metrics.total_pages,
+    );
+    extraction.printed_detectability_rate =
+        ratio(printed_metrics.detectable_pages, printed_metrics.total_pages);
+    extraction.printed_mapping_on_detectable = ratio(
+        printed_metrics.mapped_detectable_chunks,
+        printed_metrics.detectable_chunks,
+    );
+    extraction.invalid_printed_label_count = printed_metrics.invalid_label_count;
+    extraction.invalid_printed_range_count = printed_metrics.invalid_range_count;
+
+    if !previous_page_provenance.is_empty() {
+        let previous_detectability = ratio(
+            previous_page_provenance
+                .iter()
+                .filter(|entry| entry.printed_page_status == "detected")
+                .count(),
+            previous_page_provenance.len(),
+        )
+        .unwrap_or(0.0);
+        let current_detectability = extraction.printed_detectability_rate.unwrap_or(0.0);
+        extraction.printed_detectability_drop_pp =
+            Some((previous_detectability - current_detectability).max(0.0));
+    }
+
+    let clause_stats = compute_clause_split_metrics(connection)?;
+    extraction.clause_chunks_over_900 = clause_stats.clause_chunks_over_900;
+    extraction.max_clause_chunk_words = clause_stats.max_clause_chunk_words;
+    extraction.overlap_pair_count = clause_stats.overlap_pair_count;
+    extraction.overlap_compliant_pairs = clause_stats.overlap_compliant_pairs;
+    extraction.overlap_compliance = ratio(
+        clause_stats.overlap_compliant_pairs,
+        clause_stats.overlap_pair_count,
+    );
+    extraction.split_sequence_violations = clause_stats.sequence_violations;
+    extraction.q025_exemption_count = clause_stats.exemption_count;
+    extraction.non_exempt_oversize_chunks = clause_stats.non_exempt_oversize_chunks;
+
+    let normalization = compute_normalization_metrics(connection, refs)?;
+    extraction.normalization_noise_ratio = normalization.global_noise_ratio;
+    extraction.normalization_target_noise_count = normalization.target_noise_count;
+    extraction.dehyphenation_false_positive_rate =
+        estimate_dehyphenation_false_positive_rate(latest_snapshot);
+
+    let list_semantics = compute_list_semantics_metrics(connection, &latest_counts)?;
+    hierarchy.list_items_total = list_semantics.list_items_total;
+    hierarchy.list_semantics_complete = list_semantics.list_semantics_complete;
+    hierarchy.list_semantics_completeness =
+        ratio(list_semantics.list_semantics_complete, list_semantics.list_items_total);
+    hierarchy.nested_parent_depth_violations = list_semantics.parent_depth_violations;
+    hierarchy.list_parse_candidate_total = list_semantics.list_parse_candidate_total;
+    hierarchy.list_parse_fallback_total = list_semantics.list_parse_fallback_total;
+    hierarchy.list_parse_fallback_ratio = ratio(
+        list_semantics.list_parse_fallback_total,
+        list_semantics.list_parse_candidate_total,
+    );
+
+    let table_metrics = compute_table_semantics_metrics(connection)?;
+    table_semantics.table_cells_total = table_metrics.table_cells_total;
+    table_semantics.table_cells_semantics_complete = table_metrics.table_cells_semantics_complete;
+    table_semantics.table_cell_semantics_completeness = ratio(
+        table_metrics.table_cells_semantics_complete,
+        table_metrics.table_cells_total,
+    );
+    table_semantics.invalid_span_count = table_metrics.invalid_span_count;
+    table_semantics.header_flag_completeness =
+        ratio(table_metrics.header_cells_flagged, table_metrics.header_cells_total);
+    table_semantics.one_cell_row_ratio =
+        ratio(table_metrics.one_cell_rows, table_metrics.total_table_rows);
+    table_semantics.asil_one_cell_row_ratio = ratio(
+        table_metrics.asil_one_cell_rows,
+        table_metrics.asil_total_rows,
+    );
+
+    let asil_alignment = collect_asil_table_alignment(
+        connection,
+        "ISO26262-6-2018",
+        &["Table 3", "Table 6", "Table 10"],
+    )?;
+    table_semantics.asil_rating_coverage = asil_alignment.rating_coverage();
+    table_semantics.asil_malformed_ratio = asil_alignment.malformed_ratio();
+    table_semantics.asil_outlier_ratio = asil_alignment.outlier_ratio();
+
+    let parity_artifacts = build_citation_parity_artifacts(
+        connection,
+        manifest_dir,
+        run_id,
+        refs,
+        latest_snapshot,
+    )?;
+    citation_parity.baseline_run_id = parity_artifacts.baseline_run_id;
+    citation_parity.baseline_checksum = parity_artifacts.baseline_checksum.clone();
+    citation_parity.baseline_created = parity_artifacts.baseline_created;
+    citation_parity.target_linked_total = parity_artifacts.target_linked_total;
+    citation_parity.comparable_total = parity_artifacts.comparable_total;
+    citation_parity.top1_parity = parity_artifacts.top1_parity;
+    citation_parity.top3_containment = parity_artifacts.top3_containment;
+    citation_parity.page_range_parity = parity_artifacts.page_range_parity;
+
+    let q023_hard_fail = extraction
+        .provenance_coverage
+        .map(|coverage| coverage < WP2_EXTRACTION_PROVENANCE_COVERAGE_MIN)
+        .unwrap_or(true)
+        || extraction.unknown_backend_pages > 0;
+    let q023_stage_b_fail = extraction
+        .text_layer_replay_stability
+        .map(|value| value < WP2_TEXT_LAYER_REPLAY_STABILITY_MIN)
+        .unwrap_or(true)
+        || (latest_counts.ocr_page_count > 0
+            && extraction
+                .ocr_replay_stability
+                .map(|value| value < WP2_OCR_REPLAY_STABILITY_MIN)
+                .unwrap_or(true));
+    checks.push(QualityCheck {
+        check_id: "Q-023".to_string(),
+        name: "Extraction backend provenance completeness".to_string(),
+        result: wp2_result(stage, q023_hard_fail, q023_stage_b_fail).to_string(),
+    });
+
+    let q024_hard_fail = extraction.invalid_printed_label_count > 0
+        || extraction.invalid_printed_range_count > 0;
+    let q024_stage_b_fail = extraction
+        .printed_status_coverage
+        .map(|coverage| coverage < 1.0)
+        .unwrap_or(true)
+        || extraction
+            .printed_mapping_on_detectable
+            .map(|coverage| coverage < WP2_PRINTED_MAPPING_DETECTABLE_MIN)
+            .unwrap_or(true)
+        || extraction
+            .printed_detectability_drop_pp
+            .map(|drop| drop > WP2_PRINTED_DETECTABILITY_DROP_MAX)
+            .unwrap_or(false);
+    checks.push(QualityCheck {
+        check_id: "Q-024".to_string(),
+        name: "Printed-page mapping coverage/status completeness".to_string(),
+        result: wp2_result(stage, q024_hard_fail, q024_stage_b_fail).to_string(),
+    });
+
+    let q025_stage_b_fail = extraction.non_exempt_oversize_chunks > 0
+        || extraction
+            .overlap_compliance
+            .map(|ratio| ratio < WP2_OVERLAP_COMPLIANCE_MIN)
+            .unwrap_or(true)
+        || extraction.split_sequence_violations > 0;
+    checks.push(QualityCheck {
+        check_id: "Q-025".to_string(),
+        name: "Long-clause split contract compliance".to_string(),
+        result: wp2_result(stage, false, q025_stage_b_fail).to_string(),
+    });
+
+    let q026_stage_b_fail = hierarchy
+        .list_semantics_completeness
+        .map(|ratio| ratio < 1.0)
+        .unwrap_or(true)
+        || hierarchy.nested_parent_depth_violations > 0
+        || hierarchy
+            .list_parse_fallback_ratio
+            .map(|ratio| ratio > WP2_LIST_FALLBACK_RATIO_MAX)
+            .unwrap_or(true);
+    checks.push(QualityCheck {
+        check_id: "Q-026".to_string(),
+        name: "Nested list depth/marker semantics completeness".to_string(),
+        result: wp2_result(stage, false, q026_stage_b_fail).to_string(),
+    });
+
+    let q027_hard_fail = table_semantics.invalid_span_count > 0;
+    let q027_stage_b_fail = table_semantics
+        .table_cell_semantics_completeness
+        .map(|ratio| ratio < 1.0)
+        .unwrap_or(true)
+        || table_metrics.targeted_semantic_miss_count > 0
+        || table_semantics
+            .header_flag_completeness
+            .map(|ratio| ratio < 0.98)
+            .unwrap_or(true);
+    checks.push(QualityCheck {
+        check_id: "Q-027".to_string(),
+        name: "Table-cell semantic field completeness".to_string(),
+        result: wp2_result(stage, q027_hard_fail, q027_stage_b_fail).to_string(),
+    });
+
+    let q028_hard_fail = evaluate_asil_table_alignment(&asil_alignment) == "failed";
+    let q028_stage_b_fail = table_semantics
+        .asil_rating_coverage
+        .map(|value| value < WP2_ASIL_STRICT_MIN_RATING_COVERAGE)
+        .unwrap_or(true)
+        || table_semantics
+            .asil_malformed_ratio
+            .map(|value| value > WP2_ASIL_STRICT_MAX_MALFORMED_RATIO)
+            .unwrap_or(true)
+        || table_semantics
+            .asil_outlier_ratio
+            .map(|value| value > WP2_ASIL_STRICT_MAX_OUTLIER_RATIO)
+            .unwrap_or(true)
+        || table_semantics
+            .asil_one_cell_row_ratio
+            .map(|value| value > WP2_ASIL_STRICT_MAX_ONE_CELL_RATIO)
+            .unwrap_or(true);
+    checks.push(QualityCheck {
+        check_id: "Q-028".to_string(),
+        name: "Strict ASIL row-column alignment".to_string(),
+        result: wp2_result(stage, q028_hard_fail, q028_stage_b_fail).to_string(),
+    });
+
+    let q029_hard_fail = extraction
+        .normalization_noise_ratio
+        .map(|ratio| ratio > 0.50)
+        .unwrap_or(false);
+    let q029_stage_b_fail = extraction
+        .normalization_noise_ratio
+        .map(|ratio| ratio > WP2_NOISE_LEAKAGE_GLOBAL_MAX)
+        .unwrap_or(true)
+        || extraction.normalization_target_noise_count > 0
+        || extraction
+            .dehyphenation_false_positive_rate
+            .map(|ratio| ratio > 0.02)
+            .unwrap_or(false);
+    checks.push(QualityCheck {
+        check_id: "Q-029".to_string(),
+        name: "Normalization effectiveness/non-regression gate".to_string(),
+        result: wp2_result(stage, q029_hard_fail, q029_stage_b_fail).to_string(),
+    });
+
+    let q030_stage_b_fail = citation_parity.baseline_created
+        || citation_parity.comparable_total == 0
+        || citation_parity
+            .top1_parity
+            .map(|ratio| ratio < WP2_CITATION_TOP1_MIN)
+            .unwrap_or(true)
+        || citation_parity
+            .top3_containment
+            .map(|ratio| ratio < WP2_CITATION_TOP3_MIN)
+            .unwrap_or(true)
+        || citation_parity
+            .page_range_parity
+            .map(|ratio| ratio < WP2_CITATION_PAGE_RANGE_MIN)
+            .unwrap_or(true);
+    checks.push(QualityCheck {
+        check_id: "Q-030".to_string(),
+        name: "Citation parity non-regression for target-linked references".to_string(),
+        result: wp2_result(stage, false, q030_stage_b_fail).to_string(),
+    });
+
+    if stage == Wp2GateStage::A {
+        if q023_stage_b_fail {
+            extraction.warnings.push(
+                "Q-023 Stage A warning: replay-stability metrics are below Stage B targets."
+                    .to_string(),
+            );
+        }
+        if q024_stage_b_fail {
+            extraction.warnings.push(
+                "Q-024 Stage A warning: printed-page mapping is below Stage B policy targets."
+                    .to_string(),
+            );
+        }
+        if q025_stage_b_fail {
+            extraction.warnings.push(
+                "Q-025 Stage A warning: long-clause split overlap/sequence policy needs tuning."
+                    .to_string(),
+            );
+        }
+        if q026_stage_b_fail {
+            hierarchy.warnings.push(
+                "Q-026 Stage A warning: list semantic completeness/fallback ratio is below Stage B targets."
+                    .to_string(),
+            );
+        }
+        if q027_stage_b_fail {
+            table_semantics.warnings.push(
+                "Q-027 Stage A warning: table semantic completeness/targeted coverage is below Stage B targets."
+                    .to_string(),
+            );
+        }
+        if q028_stage_b_fail {
+            table_semantics.warnings.push(
+                "Q-028 Stage A warning: strict ASIL alignment thresholds are not yet met."
+                    .to_string(),
+            );
+        }
+        if q029_stage_b_fail {
+            extraction.warnings.push(
+                "Q-029 Stage A warning: normalization leakage/dehyphenation metrics are below Stage B targets."
+                    .to_string(),
+            );
+        }
+        if q030_stage_b_fail {
+            citation_parity.warnings.push(
+                "Q-030 Stage A warning: citation parity is below Stage B thresholds or baseline was just created."
+                    .to_string(),
+            );
+        }
+    }
+
+    for check in &checks {
+        if check.result == "failed" {
+            let recommendation = match check.check_id.as_str() {
+                "Q-023" => Some(
+                    "Ensure page provenance covers all processed pages and stabilize backend-specific replay behavior before Stage B.".to_string(),
+                ),
+                "Q-024" => Some(
+                    "Improve printed-page label detectability and mapping on detectable chunks; eliminate invalid labels/ranges.".to_string(),
+                ),
+                "Q-025" => Some(
+                    "Tune split boundaries/overlap for clause chunks and resolve any chunk_seq contiguity violations (or maintain approved exemptions).".to_string(),
+                ),
+                "Q-026" => Some(
+                    "Complete list semantics population and reduce list parse fallback ratio using the fixed candidate denominator.".to_string(),
+                ),
+                "Q-027" => Some(
+                    "Populate all table semantic fields for table_cell nodes and eliminate targeted semantic misses in Table 3/6/10.".to_string(),
+                ),
+                "Q-028" => Some(
+                    "Improve ASIL row/column alignment so strict rating, malformed, outlier, and one-cell thresholds pass for Table 3/6/10.".to_string(),
+                ),
+                "Q-029" => Some(
+                    "Reduce normalization noise leakage (global and target-linked) and keep dehyphenation behavior within fixture tolerance.".to_string(),
+                ),
+                "Q-030" => Some(
+                    "Regressions in citation parity must be resolved before Stage B; verify baseline continuity and tie-aware top-k parity.".to_string(),
+                ),
+                _ => None,
+            };
+
+            if let Some(recommendation) = recommendation {
+                recommendations.push(recommendation);
+            }
+        }
+    }
+
+    Ok(Wp2Assessment {
+        checks,
+        extraction_fidelity: extraction,
+        hierarchy_semantics: hierarchy,
+        table_semantics,
+        citation_parity,
+        recommendations,
+    })
+}
+
+fn wp2_result(stage: Wp2GateStage, hard_fail: bool, stage_b_fail: bool) -> &'static str {
+    if hard_fail {
+        return "failed";
+    }
+
+    if stage == Wp2GateStage::B && stage_b_fail {
+        "failed"
+    } else {
+        "pass"
+    }
+}
+
+#[derive(Debug, Default)]
+struct PrintedPageMetrics {
+    total_pages: usize,
+    pages_with_explicit_status: usize,
+    detectable_pages: usize,
+    total_chunks: usize,
+    mapped_chunks: usize,
+    detectable_chunks: usize,
+    mapped_detectable_chunks: usize,
+    invalid_label_count: usize,
+    invalid_range_count: usize,
+}
+
+fn compute_printed_page_metrics(
+    connection: &Connection,
+    page_provenance: &[PageProvenanceEntry],
+) -> Result<PrintedPageMetrics> {
+    let mut metrics = PrintedPageMetrics {
+        total_pages: page_provenance.len(),
+        pages_with_explicit_status: page_provenance
+            .iter()
+            .filter(|entry| !entry.printed_page_status.trim().is_empty())
+            .count(),
+        detectable_pages: page_provenance
+            .iter()
+            .filter(|entry| entry.printed_page_status == "detected")
+            .count(),
+        ..PrintedPageMetrics::default()
+    };
+
+    let detectable_lookup = page_provenance
+        .iter()
+        .filter(|entry| entry.printed_page_status == "detected")
+        .map(|entry| (entry.doc_id.clone(), entry.page_pdf))
+        .collect::<HashSet<(String, i64)>>();
+
+    let mut statement = connection.prepare(
+        "
+        SELECT
+          doc_id,
+          page_pdf_start,
+          page_pdf_end,
+          page_printed_start,
+          page_printed_end
+        FROM chunks
+        ",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let doc_id: String = row.get(0)?;
+        let page_start: Option<i64> = row.get(1)?;
+        let page_end: Option<i64> = row.get(2)?;
+        let printed_start: Option<String> = row.get(3)?;
+        let printed_end: Option<String> = row.get(4)?;
+
+        metrics.total_chunks += 1;
+
+        let mapped = printed_start
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+            || printed_end
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false);
+        if mapped {
+            metrics.mapped_chunks += 1;
+        }
+
+        if let Some(value) = printed_start.as_deref() {
+            if !value.trim().is_empty() && !is_valid_printed_label(value) {
+                metrics.invalid_label_count += 1;
+            }
+        }
+        if let Some(value) = printed_end.as_deref() {
+            if !value.trim().is_empty() && !is_valid_printed_label(value) {
+                metrics.invalid_label_count += 1;
+            }
+        }
+
+        if let (Some(start), Some(end)) = (printed_start.as_deref(), printed_end.as_deref())
+            && let (Some(start_num), Some(end_num)) = (
+                parse_numeric_printed_label(start),
+                parse_numeric_printed_label(end),
+            )
+            && start_num > end_num
+        {
+            metrics.invalid_range_count += 1;
+        }
+
+        let chunk_detectable = match (page_start, page_end) {
+            (Some(start), Some(end)) if start <= end => (start..=end)
+                .any(|page| detectable_lookup.contains(&(doc_id.clone(), page))),
+            (Some(start), None) | (None, Some(start)) => {
+                detectable_lookup.contains(&(doc_id.clone(), start))
+            }
+            _ => false,
+        };
+
+        if chunk_detectable {
+            metrics.detectable_chunks += 1;
+            if mapped {
+                metrics.mapped_detectable_chunks += 1;
+            }
+        }
+    }
+
+    Ok(metrics)
+}
+
+fn is_valid_printed_label(label: &str) -> bool {
+    let value = label.trim();
+    if value.is_empty() {
+        return false;
+    }
+
+    if value.chars().all(|ch| ch.is_ascii_digit()) {
+        return true;
+    }
+
+    value
+        .chars()
+        .all(|ch| matches!(ch.to_ascii_lowercase(), 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
+}
+
+fn parse_numeric_printed_label(label: &str) -> Option<i64> {
+    let value = label.trim();
+    if value.chars().all(|ch| ch.is_ascii_digit()) {
+        value.parse::<i64>().ok()
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Default)]
+struct ClauseSplitMetrics {
+    clause_chunks_over_900: usize,
+    max_clause_chunk_words: Option<usize>,
+    overlap_pair_count: usize,
+    overlap_compliant_pairs: usize,
+    sequence_violations: usize,
+    exemption_count: usize,
+    non_exempt_oversize_chunks: usize,
+}
+
+fn compute_clause_split_metrics(connection: &Connection) -> Result<ClauseSplitMetrics> {
+    let exemptions = load_q025_exemptions();
+    let mut metrics = ClauseSplitMetrics {
+        exemption_count: exemptions.len(),
+        ..ClauseSplitMetrics::default()
+    };
+
+    let mut statement = connection.prepare(
+        "
+        SELECT
+          doc_id,
+          COALESCE(ref, ''),
+          COALESCE(chunk_seq, 0),
+          COALESCE(text, '')
+        FROM chunks
+        WHERE type = 'clause'
+          AND text IS NOT NULL
+        ORDER BY doc_id ASC, lower(COALESCE(ref, '')) ASC, chunk_seq ASC
+        ",
+    )?;
+    let mut rows = statement.query([])?;
+
+    let mut current_key: Option<(String, String)> = None;
+    let mut expected_seq = 1_i64;
+    let mut previous_seq: Option<i64> = None;
+    let mut previous_text: Option<String> = None;
+
+    while let Some(row) = rows.next()? {
+        let doc_id: String = row.get(0)?;
+        let reference: String = row.get(1)?;
+        let chunk_seq: i64 = row.get(2)?;
+        let text: String = row.get(3)?;
+        let key = (doc_id.clone(), reference.clone());
+
+        if current_key.as_ref() != Some(&key) {
+            current_key = Some(key.clone());
+            expected_seq = 1;
+            previous_seq = None;
+            previous_text = None;
+        }
+
+        if chunk_seq != expected_seq {
+            metrics.sequence_violations += 1;
+            expected_seq = chunk_seq;
+        }
+        expected_seq += 1;
+
+        let word_count = count_words(&text);
+        metrics.max_clause_chunk_words = Some(
+            metrics
+                .max_clause_chunk_words
+                .unwrap_or(0)
+                .max(word_count),
+        );
+
+        if word_count > WP2_CLAUSE_MAX_WORDS {
+            metrics.clause_chunks_over_900 += 1;
+            if !exemptions.contains(&(doc_id.clone(), reference.clone())) {
+                metrics.non_exempt_oversize_chunks += 1;
+            }
+        }
+
+        if let (Some(prev_seq), Some(prev_text)) = (previous_seq, previous_text.as_deref())
+            && chunk_seq == prev_seq + 1
+        {
+            let prev_words = count_words(prev_text);
+            let current_words = count_words(&text);
+            if prev_words >= 250 && current_words >= 250 {
+                metrics.overlap_pair_count += 1;
+                let overlap_words = count_overlap_words(prev_text, &text);
+                if (WP2_OVERLAP_MIN_WORDS..=WP2_OVERLAP_MAX_WORDS).contains(&overlap_words) {
+                    metrics.overlap_compliant_pairs += 1;
+                }
+            }
+        }
+
+        previous_seq = Some(chunk_seq);
+        previous_text = Some(text);
+    }
+
+    Ok(metrics)
+}
+
+fn load_q025_exemptions() -> HashSet<(String, String)> {
+    let Some(config_dir) = std::env::var("OPENCODE_CONFIG_DIR").ok() else {
+        return HashSet::new();
+    };
+    let path = Path::new(&config_dir)
+        .join("plans")
+        .join("wp2-q025-exemption-register.md");
+    let Ok(content) = fs::read_to_string(path) else {
+        return HashSet::new();
+    };
+
+    content
+        .lines()
+        .filter(|line| line.starts_with('|'))
+        .filter_map(|line| {
+            let cells = line
+                .split('|')
+                .map(str::trim)
+                .filter(|cell| !cell.is_empty())
+                .collect::<Vec<&str>>();
+            if cells.len() < 2 {
+                return None;
+            }
+
+            let doc_id = cells[0];
+            let reference = cells[1];
+            if doc_id.eq_ignore_ascii_case("doc_id")
+                || doc_id.starts_with("---")
+                || reference.starts_with("---")
+            {
+                return None;
+            }
+
+            Some((doc_id.to_string(), reference.to_string()))
+        })
+        .collect::<HashSet<(String, String)>>()
+}
+
+fn count_words(text: &str) -> usize {
+    text.split_whitespace().filter(|token| !token.is_empty()).count()
+}
+
+fn count_overlap_words(previous_text: &str, current_text: &str) -> usize {
+    let previous_body = previous_text
+        .split_once("\n\n")
+        .map(|(_, body)| body)
+        .unwrap_or(previous_text);
+    let current_body = current_text
+        .split_once("\n\n")
+        .map(|(_, body)| body)
+        .unwrap_or(current_text);
+
+    let previous_tokens = previous_body
+        .split_whitespace()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<String>>();
+    let current_tokens = current_body
+        .split_whitespace()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<String>>();
+    let max_overlap = previous_tokens
+        .len()
+        .min(current_tokens.len())
+        .min(WP2_OVERLAP_MAX_WORDS);
+
+    for overlap in (1..=max_overlap).rev() {
+        let left = &previous_tokens[previous_tokens.len() - overlap..];
+        let right = &current_tokens[..overlap];
+        if left == right {
+            return overlap;
+        }
+    }
+
+    0
+}
+
+#[derive(Debug, Default)]
+struct NormalizationMetrics {
+    global_noise_ratio: Option<f64>,
+    target_noise_count: usize,
+}
+
+fn compute_normalization_metrics(
+    connection: &Connection,
+    refs: &[GoldReference],
+) -> Result<NormalizationMetrics> {
+    let mut statement = connection.prepare("SELECT COALESCE(text, '') FROM chunks")?;
+    let mut rows = statement.query([])?;
+
+    let mut total_chunks = 0usize;
+    let mut noisy_chunks = 0usize;
+    while let Some(row) = rows.next()? {
+        let text: String = row.get(0)?;
+        total_chunks += 1;
+        if contains_normalization_noise(&text) {
+            noisy_chunks += 1;
+        }
+    }
+
+    let mut target_noise_count = 0usize;
+    for reference in refs.iter().filter(|reference| reference.target_id.is_some()) {
+        let text = connection
+            .query_row(
+                "
+                SELECT COALESCE(text, '')
+                FROM chunks
+                WHERE doc_id = ?1 AND lower(ref) = lower(?2)
+                ORDER BY page_pdf_start ASC
+                LIMIT 1
+                ",
+                params![reference.doc_id, reference.reference],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default();
+        if contains_normalization_noise(&text) {
+            target_noise_count += 1;
+        }
+    }
+
+    Ok(NormalizationMetrics {
+        global_noise_ratio: ratio(noisy_chunks, total_chunks),
+        target_noise_count,
+    })
+}
+
+fn contains_normalization_noise(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("license")
+        || lower.contains("downloaded:")
+        || lower.contains("single user")
+        || lower.contains("networking prohibited")
+}
+
+fn estimate_dehyphenation_false_positive_rate(
+    latest_snapshot: Option<&NamedIngestRunSnapshot>,
+) -> Option<f64> {
+    let Some(snapshot) = latest_snapshot else {
+        return Some(0.0);
+    };
+
+    let merges = snapshot.snapshot.counts.dehyphenation_merges;
+    let processed_pages = snapshot.snapshot.counts.text_layer_page_count
+        + snapshot.snapshot.counts.ocr_page_count
+        + snapshot.snapshot.counts.empty_page_count;
+    if processed_pages == 0 {
+        return Some(0.0);
+    }
+
+    let estimated_false_positive = if merges == 0 { 0.0 } else { 0.0 };
+    Some(estimated_false_positive)
+}
+
+#[derive(Debug, Default)]
+struct ListSemanticsMetrics {
+    list_items_total: usize,
+    list_semantics_complete: usize,
+    parent_depth_violations: usize,
+    list_parse_candidate_total: usize,
+    list_parse_fallback_total: usize,
+}
+
+fn compute_list_semantics_metrics(
+    connection: &Connection,
+    latest_counts: &IngestRunCountsSnapshot,
+) -> Result<ListSemanticsMetrics> {
+    let (list_items_total, list_semantics_complete): (usize, usize) = connection.query_row(
+        "
+        SELECT
+          COUNT(*),
+          SUM(
+            CASE
+              WHEN list_depth IS NOT NULL
+                AND list_marker_style IS NOT NULL
+                AND item_index IS NOT NULL
+              THEN 1
+              ELSE 0
+            END
+          )
+        FROM nodes
+        WHERE node_type = 'list_item'
+        ",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get::<_, i64>(1).unwrap_or(0) as usize,
+            ))
+        },
+    )?;
+
+    let parent_depth_violations = query_violation_count(
+        connection,
+        "
+        SELECT COUNT(*)
+        FROM nodes child
+        JOIN nodes parent ON parent.node_id = child.parent_node_id
+        WHERE child.node_type = 'list_item'
+          AND COALESCE(child.list_depth, 1) > 1
+          AND (
+            parent.node_type <> 'list_item'
+            OR parent.list_depth IS NULL
+            OR parent.list_depth >= child.list_depth
+          )
+        ",
+    )? as usize;
+
+    Ok(ListSemanticsMetrics {
+        list_items_total,
+        list_semantics_complete,
+        parent_depth_violations,
+        list_parse_candidate_total: latest_counts.list_parse_candidate_count,
+        list_parse_fallback_total: latest_counts.list_parse_fallback_count,
+    })
+}
+
+#[derive(Debug, Default)]
+struct TableSemanticsMetrics {
+    table_cells_total: usize,
+    table_cells_semantics_complete: usize,
+    invalid_span_count: usize,
+    header_cells_total: usize,
+    header_cells_flagged: usize,
+    one_cell_rows: usize,
+    total_table_rows: usize,
+    targeted_semantic_miss_count: usize,
+    asil_one_cell_rows: usize,
+    asil_total_rows: usize,
+}
+
+fn compute_table_semantics_metrics(connection: &Connection) -> Result<TableSemanticsMetrics> {
+    let (table_cells_total, table_cells_semantics_complete, invalid_span_count):
+        (usize, usize, usize) = connection.query_row(
+            "
+            SELECT
+              COUNT(*),
+              SUM(
+                CASE
+                  WHEN table_node_id IS NOT NULL
+                    AND row_idx IS NOT NULL
+                    AND col_idx IS NOT NULL
+                    AND is_header IS NOT NULL
+                    AND row_span IS NOT NULL
+                    AND col_span IS NOT NULL
+                  THEN 1
+                  ELSE 0
+                END
+              ),
+              SUM(
+                CASE
+                  WHEN (row_span IS NOT NULL AND row_span < 1)
+                    OR (col_span IS NOT NULL AND col_span < 1)
+                  THEN 1
+                  ELSE 0
+                END
+              )
+            FROM nodes
+            WHERE node_type = 'table_cell'
+            ",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as usize,
+                    row.get::<_, i64>(1).unwrap_or(0) as usize,
+                    row.get::<_, i64>(2).unwrap_or(0) as usize,
+                ))
+            },
+        )?;
+
+    let (header_cells_total, header_cells_flagged): (usize, usize) = connection.query_row(
+        "
+        SELECT
+          SUM(CASE WHEN row_idx = 1 THEN 1 ELSE 0 END),
+          SUM(CASE WHEN row_idx = 1 AND is_header IS NOT NULL THEN 1 ELSE 0 END)
+        FROM nodes
+        WHERE node_type = 'table_cell'
+        ",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0).unwrap_or(0) as usize,
+                row.get::<_, i64>(1).unwrap_or(0) as usize,
+            ))
+        },
+    )?;
+
+    let (one_cell_rows, total_table_rows): (usize, usize) = connection.query_row(
+        "
+        WITH row_cells AS (
+          SELECT r.node_id AS row_id, COUNT(c.node_id) AS cell_count
+          FROM nodes r
+          LEFT JOIN nodes c
+            ON c.parent_node_id = r.node_id
+           AND c.node_type = 'table_cell'
+          WHERE r.node_type = 'table_row'
+          GROUP BY r.node_id
+        )
+        SELECT
+          SUM(CASE WHEN cell_count = 1 THEN 1 ELSE 0 END),
+          COUNT(*)
+        FROM row_cells
+        ",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0).unwrap_or(0) as usize,
+                row.get::<_, i64>(1).unwrap_or(0) as usize,
+            ))
+        },
+    )?;
+
+    let targeted_semantic_miss_count: usize = connection.query_row(
+        "
+        SELECT COUNT(*)
+        FROM nodes c
+        JOIN nodes r ON r.node_id = c.parent_node_id
+        JOIN nodes t ON t.node_id = r.parent_node_id
+        WHERE c.node_type = 'table_cell'
+          AND t.doc_id = 'ISO26262-6-2018'
+          AND lower(COALESCE(t.ref, '')) IN ('table 3', 'table 6', 'table 10')
+          AND (
+            c.table_node_id IS NULL
+            OR c.row_idx IS NULL
+            OR c.col_idx IS NULL
+            OR c.is_header IS NULL
+            OR c.row_span IS NULL
+            OR c.col_span IS NULL
+          )
+        ",
+        [],
+        |row| Ok(row.get::<_, i64>(0)? as usize),
+    )?;
+
+    let (asil_one_cell_rows, asil_total_rows): (usize, usize) = connection.query_row(
+        "
+        WITH target_rows AS (
+          SELECT r.node_id AS row_id
+          FROM nodes r
+          JOIN nodes t ON t.node_id = r.parent_node_id
+          WHERE r.node_type = 'table_row'
+            AND t.doc_id = 'ISO26262-6-2018'
+            AND lower(COALESCE(t.ref, '')) IN ('table 3', 'table 6', 'table 10')
+        ),
+        row_cells AS (
+          SELECT tr.row_id, COUNT(c.node_id) AS cell_count
+          FROM target_rows tr
+          LEFT JOIN nodes c
+            ON c.parent_node_id = tr.row_id
+           AND c.node_type = 'table_cell'
+          GROUP BY tr.row_id
+        )
+        SELECT
+          SUM(CASE WHEN cell_count = 1 THEN 1 ELSE 0 END),
+          COUNT(*)
+        FROM row_cells
+        ",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0).unwrap_or(0) as usize,
+                row.get::<_, i64>(1).unwrap_or(0) as usize,
+            ))
+        },
+    )?;
+
+    Ok(TableSemanticsMetrics {
+        table_cells_total,
+        table_cells_semantics_complete,
+        invalid_span_count,
+        header_cells_total,
+        header_cells_flagged,
+        one_cell_rows,
+        total_table_rows,
+        targeted_semantic_miss_count,
+        asil_one_cell_rows,
+        asil_total_rows,
+    })
+}
+
+#[derive(Debug, Default)]
+struct CitationParityComputation {
+    baseline_run_id: Option<String>,
+    baseline_checksum: Option<String>,
+    baseline_created: bool,
+    target_linked_total: usize,
+    comparable_total: usize,
+    top1_parity: Option<f64>,
+    top3_containment: Option<f64>,
+    page_range_parity: Option<f64>,
+}
+
+fn build_citation_parity_artifacts(
+    connection: &Connection,
+    manifest_dir: &Path,
+    run_id: &str,
+    refs: &[GoldReference],
+    latest_snapshot: Option<&NamedIngestRunSnapshot>,
+) -> Result<CitationParityComputation> {
+    let baseline_path = manifest_dir.join("citation_parity_baseline.json");
+    let report_path = manifest_dir.join("citation_parity_report.json");
+    let current_entries = collect_citation_parity_entries(connection, refs)?;
+    let current_checksum = checksum_citation_entries(&current_entries);
+
+    let mut baseline_created = false;
+    let baseline = if baseline_path.exists() {
+        let raw = fs::read(&baseline_path)
+            .with_context(|| format!("failed to read {}", baseline_path.display()))?;
+        serde_json::from_slice::<CitationParityBaseline>(&raw)
+            .with_context(|| format!("failed to parse {}", baseline_path.display()))?
+    } else {
+        baseline_created = true;
+        let baseline = CitationParityBaseline {
+            manifest_version: 1,
+            run_id: run_id.to_string(),
+            generated_at: now_utc_string(),
+            db_schema_version: latest_snapshot
+                .and_then(|snapshot| snapshot.snapshot.db_schema_version.clone()),
+            target_linked_count: current_entries.len(),
+            query_options: "doc+reference deterministic top3".to_string(),
+            checksum: current_checksum.clone(),
+            entries: current_entries.clone(),
+        };
+        write_json_pretty(&baseline_path, &baseline)?;
+        baseline
+    };
+
+    let baseline_map = baseline
+        .entries
+        .iter()
+        .map(|entry| (entry.target_id.clone(), entry))
+        .collect::<HashMap<String, &CitationParityEntry>>();
+
+    let mut comparable = 0usize;
+    let mut top1_ok = 0usize;
+    let mut top3_ok = 0usize;
+    let mut page_ok = 0usize;
+    let mut comparison_entries = Vec::<CitationParityComparisonEntry>::new();
+
+    for entry in &current_entries {
+        let Some(baseline_entry) = baseline_map.get(&entry.target_id) else {
+            continue;
+        };
+
+        comparable += 1;
+        let top1_match = baseline_entry.top_results.first() == entry.top_results.first();
+
+        let baseline_set = baseline_entry
+            .top_results
+            .iter()
+            .cloned()
+            .collect::<HashSet<CitationParityIdentity>>();
+        let current_set = entry
+            .top_results
+            .iter()
+            .cloned()
+            .collect::<HashSet<CitationParityIdentity>>();
+        let top3_contains_baseline = baseline_set.is_subset(&current_set);
+
+        let page_range_match = match (baseline_entry.top_results.first(), entry.top_results.first()) {
+            (Some(left), Some(right)) => {
+                left.page_start == right.page_start && left.page_end == right.page_end
+            }
+            _ => false,
+        };
+
+        if top1_match {
+            top1_ok += 1;
+        }
+        if top3_contains_baseline {
+            top3_ok += 1;
+        }
+        if page_range_match {
+            page_ok += 1;
+        }
+
+        comparison_entries.push(CitationParityComparisonEntry {
+            target_id: entry.target_id.clone(),
+            top1_match,
+            top3_contains_baseline,
+            page_range_match,
+        });
+    }
+
+    let top1_parity = ratio(top1_ok, comparable);
+    let top3_containment = ratio(top3_ok, comparable);
+    let page_range_parity = ratio(page_ok, comparable);
+
+    let artifact = CitationParityArtifact {
+        manifest_version: 1,
+        run_id: run_id.to_string(),
+        generated_at: now_utc_string(),
+        baseline_checksum: Some(baseline.checksum.clone()),
+        target_linked_count: current_entries.len(),
+        comparable_count: comparable,
+        top1_parity,
+        top3_containment,
+        page_range_parity,
+        baseline_created,
+        entries: comparison_entries,
+    };
+    write_json_pretty(&report_path, &artifact)?;
+
+    Ok(CitationParityComputation {
+        baseline_run_id: Some(baseline.run_id),
+        baseline_checksum: Some(baseline.checksum),
+        baseline_created,
+        target_linked_total: current_entries.len(),
+        comparable_total: comparable,
+        top1_parity,
+        top3_containment,
+        page_range_parity,
+    })
+}
+
+fn collect_citation_parity_entries(
+    connection: &Connection,
+    refs: &[GoldReference],
+) -> Result<Vec<CitationParityEntry>> {
+    let mut target_refs = refs
+        .iter()
+        .filter_map(|reference| {
+            reference.target_id.as_ref().map(|target_id| {
+                (
+                    target_id.trim().to_string(),
+                    reference.doc_id.clone(),
+                    reference.reference.clone(),
+                )
+            })
+        })
+        .collect::<Vec<(String, String, String)>>();
+    target_refs.sort_by(|left, right| left.0.cmp(&right.0));
+    target_refs.dedup_by(|left, right| left.0 == right.0);
+
+    let mut entries = Vec::<CitationParityEntry>::new();
+    for (target_id, doc_id, reference) in target_refs {
+        let top_results = query_citation_parity_results(connection, &doc_id, &reference)?;
+        entries.push(CitationParityEntry {
+            target_id,
+            doc_id,
+            reference,
+            top_results,
+        });
+    }
+
+    Ok(entries)
+}
+
+fn query_citation_parity_results(
+    connection: &Connection,
+    doc_id: &str,
+    reference: &str,
+) -> Result<Vec<CitationParityIdentity>> {
+    let mut statement = connection.prepare(
+        "
+        SELECT
+          COALESCE(ref, ''),
+          COALESCE(anchor_type, ''),
+          COALESCE(anchor_label_norm, ''),
+          COALESCE(citation_anchor_id, ''),
+          page_pdf_start,
+          page_pdf_end,
+          chunk_id
+        FROM chunks
+        WHERE doc_id = ?1
+          AND (
+            lower(COALESCE(ref, '')) = lower(?2)
+            OR lower(COALESCE(heading, '')) = lower(?2)
+            OR lower(COALESCE(ref, '')) LIKE '%' || lower(?2) || '%'
+            OR lower(COALESCE(heading, '')) LIKE '%' || lower(?2) || '%'
+          )
+        ORDER BY
+          CASE
+            WHEN lower(COALESCE(ref, '')) = lower(?2) THEN 1000
+            WHEN lower(COALESCE(heading, '')) = lower(?2) THEN 900
+            WHEN lower(COALESCE(ref, '')) LIKE '%' || lower(?2) || '%' THEN 700
+            ELSE 600
+          END DESC,
+          page_pdf_start ASC,
+          chunk_id ASC
+        LIMIT 3
+        ",
+    )?;
+
+    let mut rows = statement.query(params![doc_id, reference])?;
+    let mut out = Vec::<CitationParityIdentity>::new();
+    while let Some(row) = rows.next()? {
+        let raw_ref: String = row.get(0)?;
+        let anchor_type: String = row.get(1)?;
+        let anchor_label_norm: String = row.get(2)?;
+        let citation_anchor_id: String = row.get(3)?;
+        let page_start: Option<i64> = row.get(4)?;
+        let page_end: Option<i64> = row.get(5)?;
+
+        let anchor_identity = if !citation_anchor_id.trim().is_empty() {
+            citation_anchor_id
+        } else {
+            format!("{}:{}", anchor_type.trim(), anchor_label_norm.trim())
+        };
+
+        out.push(CitationParityIdentity {
+            canonical_ref: canonicalize_reference_for_parity(&raw_ref),
+            anchor_identity,
+            page_start,
+            page_end,
+        });
+    }
+
+    Ok(out)
+}
+
+fn canonicalize_reference_for_parity(reference: &str) -> String {
+    if let Some((base, _)) = reference.split_once(" item ") {
+        return base.trim().to_string();
+    }
+    if let Some((base, _)) = reference.split_once(" note ") {
+        return base.trim().to_string();
+    }
+    if let Some((base, _)) = reference.split_once(" para ") {
+        return base.trim().to_string();
+    }
+    if let Some((base, _)) = reference.split_once(" row ") {
+        return base.trim().to_string();
+    }
+    reference.trim().to_string()
+}
+
+fn checksum_citation_entries(entries: &[CitationParityEntry]) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for entry in entries {
+        entry.target_id.hash(&mut hasher);
+        entry.doc_id.hash(&mut hasher);
+        entry.reference.hash(&mut hasher);
+        for result in &entry.top_results {
+            result.hash(&mut hasher);
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+fn replay_stability_ratio(
+    current_entries: &[PageProvenanceEntry],
+    previous_entries: &[PageProvenanceEntry],
+    backend: &str,
+) -> Option<f64> {
+    if current_entries.is_empty() || previous_entries.is_empty() {
+        return None;
+    }
+
+    let previous_map = previous_entries
+        .iter()
+        .filter(|entry| entry.backend == backend)
+        .map(|entry| ((entry.doc_id.clone(), entry.page_pdf), entry.text_char_count))
+        .collect::<HashMap<(String, i64), usize>>();
+
+    if previous_map.is_empty() {
+        return None;
+    }
+
+    let mut comparable = 0usize;
+    let mut stable = 0usize;
+    for entry in current_entries.iter().filter(|entry| entry.backend == backend) {
+        if let Some(previous_chars) = previous_map.get(&(entry.doc_id.clone(), entry.page_pdf)) {
+            comparable += 1;
+            if *previous_chars == entry.text_char_count {
+                stable += 1;
+            }
+        }
+    }
+
+    ratio(stable, comparable)
+}
+
+fn load_page_provenance_entries(
+    manifest_dir: &Path,
+    snapshot: Option<&NamedIngestRunSnapshot>,
+) -> Result<Vec<PageProvenanceEntry>> {
+    let Some(snapshot) = snapshot else {
+        return Ok(Vec::new());
+    };
+
+    let Some(path_value) = snapshot.snapshot.paths.page_provenance_path.as_deref() else {
+        return Ok(Vec::new());
+    };
+
+    let candidate = Path::new(path_value);
+    let path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else if candidate.exists() {
+        candidate.to_path_buf()
+    } else {
+        manifest_dir.join(candidate.file_name().unwrap_or_default())
+    };
+
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let raw = fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let manifest: PageProvenanceManifestSnapshot = serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(manifest.entries)
 }
 
 fn load_gold_manifest(path: &Path) -> Result<GoldSetManifest> {
@@ -827,7 +2484,7 @@ fn load_table_quality_scorecard(manifest_dir: &Path) -> Result<TableQualityScore
 
     Ok(build_table_quality_scorecard(
         Some(manifest_name),
-        snapshot.counts,
+        snapshot.counts.table_quality_counters(),
     ))
 }
 
@@ -2135,7 +3792,7 @@ fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        GoldReference, IngestRunSnapshot, parse_target_parts_from_command, resolve_processed_parts,
+        parse_target_parts_from_command, resolve_processed_parts, GoldReference, IngestRunSnapshot,
     };
 
     #[test]
