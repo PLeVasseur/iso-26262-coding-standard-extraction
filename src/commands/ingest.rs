@@ -3,10 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use regex::Regex;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 use tracing::{info, warn};
 
@@ -3470,5 +3470,47 @@ mod tests {
         assert!(command.contains("--ocr-mode auto"));
         assert!(command.contains("--ocr-lang eng"));
         assert!(command.contains("--ocr-min-text-chars 200"));
+    }
+
+    #[test]
+    fn apply_page_normalization_strips_repeated_headers_and_footers() {
+        let mut extraction = ExtractedPages {
+            pages: vec![
+                "ISO 26262 Part 6\nRequirement intro\nLicensed copy".to_string(),
+                "ISO 26262 Part 6\nAnother requirement\nLicensed copy".to_string(),
+                "ISO 26262 Part 6\nFinal requirement\nLicensed copy".to_string(),
+            ],
+            ..ExtractedPages::default()
+        };
+
+        apply_page_normalization(&mut extraction);
+
+        assert_eq!(extraction.header_lines_removed, 3);
+        assert_eq!(extraction.footer_lines_removed, 3);
+        assert!(
+            extraction
+                .pages
+                .iter()
+                .all(|page| !page.contains("ISO 26262 Part 6"))
+        );
+        assert!(
+            extraction
+                .pages
+                .iter()
+                .all(|page| !page.contains("Licensed copy"))
+        );
+    }
+
+    #[test]
+    fn apply_page_normalization_merges_hyphenated_line_wraps() {
+        let mut extraction = ExtractedPages {
+            pages: vec!["soft-\nware unit".to_string()],
+            ..ExtractedPages::default()
+        };
+
+        apply_page_normalization(&mut extraction);
+
+        assert_eq!(extraction.dehyphenation_merges, 1);
+        assert_eq!(extraction.pages[0], "software unit");
     }
 }
