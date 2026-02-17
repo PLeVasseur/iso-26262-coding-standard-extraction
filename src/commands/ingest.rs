@@ -2823,4 +2823,41 @@ mod tests {
         let preferred = prefer_reconstructed_rows(5, &original, 5, &reconstructed);
         assert!(preferred);
     }
+
+    #[test]
+    fn parse_list_items_excludes_note_markers() {
+        let list_item_regex = Regex::new(
+            r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
+        )
+        .expect("list regex compiles");
+        let note_item_regex = Regex::new(r"^(?i)(?P<marker>NOTE(?:\s+\d+)?)(?:\s+(?P<body>.+))?$")
+            .expect("note regex compiles");
+
+        let text = "9.4.2 Heading\nNOTE 1 software safety requirements include implementation constraints\na) retain traceability\nb) verify assumptions";
+        let (list_items, fallback) =
+            parse_list_items(text, "9.4.2 Heading", &list_item_regex, &note_item_regex);
+
+        assert!(!fallback);
+        assert_eq!(list_items.len(), 2);
+        assert_eq!(list_items[0].marker_norm, "a");
+        assert_eq!(list_items[1].marker_norm, "b");
+    }
+
+    #[test]
+    fn parse_note_items_extracts_note_markers() {
+        let list_item_regex = Regex::new(
+            r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
+        )
+        .expect("list regex compiles");
+        let note_item_regex = Regex::new(r"^(?i)(?P<marker>NOTE(?:\s+\d+)?)(?:\s+(?P<body>.+))?$")
+            .expect("note regex compiles");
+
+        let text = "5.2 Heading\nNOTE 1 Development approaches can be suitable\nNOTE 2 Safety activities remain required\na) This line belongs to list";
+        let note_items = parse_note_items(text, "5.2 Heading", &note_item_regex, &list_item_regex);
+
+        assert_eq!(note_items.len(), 2);
+        assert_eq!(note_items[0].marker_norm, "NOTE 1");
+        assert_eq!(note_items[1].marker_norm, "NOTE 2");
+        assert!(note_items[0].text.contains("Development approaches"));
+    }
 }
