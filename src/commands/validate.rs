@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -128,6 +128,31 @@ struct QualityCheck {
     check_id: String,
     name: String,
     result: String,
+}
+
+#[derive(Debug, Default)]
+struct StructuralInvariantSummary {
+    parent_required_missing_count: i64,
+    dangling_parent_pointer_count: i64,
+    invalid_table_row_parent_count: i64,
+    invalid_table_cell_parent_count: i64,
+    invalid_list_item_parent_count: i64,
+    invalid_note_parent_count: i64,
+    invalid_note_item_parent_count: i64,
+    invalid_paragraph_parent_count: i64,
+}
+
+impl StructuralInvariantSummary {
+    fn violation_count(&self) -> i64 {
+        self.parent_required_missing_count
+            + self.dangling_parent_pointer_count
+            + self.invalid_table_row_parent_count
+            + self.invalid_table_cell_parent_count
+            + self.invalid_list_item_parent_count
+            + self.invalid_note_parent_count
+            + self.invalid_note_item_parent_count
+            + self.invalid_paragraph_parent_count
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,6 +329,15 @@ pub fn run(args: ValidateArgs) -> Result<()> {
     {
         recommendations.push(
             "Improve paragraph fallback citation accuracy by stabilizing paragraph segmentation and indices."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-018" && check.result == "failed")
+    {
+        recommendations.push(
+            "Fix structural hierarchy violations (parent lineage, dangling pointers, and note/list/table parent contracts)."
                 .to_string(),
         );
     }
@@ -1128,6 +1162,18 @@ fn build_quality_checks(
         .to_string(),
     });
 
+    let structural_invariants = collect_structural_invariants(connection)?;
+    checks.push(QualityCheck {
+        check_id: "Q-018".to_string(),
+        name: "Structural hierarchy invariants satisfied".to_string(),
+        result: if structural_invariants.violation_count() == 0 {
+            "pass"
+        } else {
+            "failed"
+        }
+        .to_string(),
+    });
+
     Ok(checks)
 }
 
@@ -1164,6 +1210,95 @@ fn summarize_checks(checks: &[QualityCheck]) -> QualitySummary {
         failed,
         pending,
     }
+}
+
+fn collect_structural_invariants(connection: &Connection) -> Result<StructuralInvariantSummary> {
+    Ok(StructuralInvariantSummary {
+        parent_required_missing_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes
+            WHERE node_type <> 'document'
+              AND parent_node_id IS NULL
+            ",
+        )?,
+        dangling_parent_pointer_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes child
+            LEFT JOIN nodes parent ON parent.node_id = child.parent_node_id
+            WHERE child.parent_node_id IS NOT NULL
+              AND parent.node_id IS NULL
+            ",
+        )?,
+        invalid_table_row_parent_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes child
+            JOIN nodes parent ON parent.node_id = child.parent_node_id
+            WHERE child.node_type = 'table_row'
+              AND parent.node_type <> 'table'
+            ",
+        )?,
+        invalid_table_cell_parent_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes child
+            JOIN nodes parent ON parent.node_id = child.parent_node_id
+            WHERE child.node_type = 'table_cell'
+              AND parent.node_type <> 'table_row'
+            ",
+        )?,
+        invalid_list_item_parent_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes child
+            JOIN nodes parent ON parent.node_id = child.parent_node_id
+            WHERE child.node_type = 'list_item'
+              AND parent.node_type <> 'list'
+            ",
+        )?,
+        invalid_note_parent_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes child
+            JOIN nodes parent ON parent.node_id = child.parent_node_id
+            WHERE child.node_type = 'note'
+              AND parent.node_type NOT IN ('clause', 'subclause', 'annex')
+            ",
+        )?,
+        invalid_note_item_parent_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes child
+            JOIN nodes parent ON parent.node_id = child.parent_node_id
+            WHERE child.node_type = 'note_item'
+              AND parent.node_type <> 'note'
+            ",
+        )?,
+        invalid_paragraph_parent_count: query_violation_count(
+            connection,
+            "
+            SELECT COUNT(*)
+            FROM nodes child
+            JOIN nodes parent ON parent.node_id = child.parent_node_id
+            WHERE child.node_type = 'paragraph'
+              AND parent.node_type NOT IN ('clause', 'subclause', 'annex')
+            ",
+        )?,
+    })
+}
+
+fn query_violation_count(connection: &Connection, sql: &str) -> Result<i64> {
+    let count = connection.query_row(sql, [], |row| row.get::<_, i64>(0))?;
+    Ok(count)
 }
 
 fn collect_hierarchy_stats(
