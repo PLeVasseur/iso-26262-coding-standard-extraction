@@ -1,0 +1,702 @@
+{
+  "manifest_version": 1,
+  "run_id": "run-20260217T165919Z",
+  "generated_at": "2026-02-17T22:46:41Z",
+  "db_schema_version": "0.3.0",
+  "decision_id": null,
+  "change_reason": null,
+  "target_linked_count": 35,
+  "query_options": "doc+reference deterministic top3",
+  "checksum": "181302c92cfeddf6",
+  "entries": [
+    {
+      "target_id": "ISO26262-2:2018-6.4.13",
+      "doc_id": "ISO26262-2-2018",
+      "reference": "6.4.13",
+      "top_results": [
+        {
+          "canonical_ref": "6.4.13",
+          "anchor_identity": "ISO26262-2-2018:6_4_13:clause:6_4_13",
+          "page_start": 35,
+          "page_end": 35
+        },
+        {
+          "canonical_ref": "6.4.13.1",
+          "anchor_identity": "ISO26262-2-2018:6_4_13_1:clause:6_4_13_1",
+          "page_start": 35,
+          "page_end": 35
+        },
+        {
+          "canonical_ref": "6.4.13.2",
+          "anchor_identity": "ISO26262-2-2018:6_4_13_2:clause:6_4_13_2",
+          "page_start": 35,
+          "page_end": 35
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-2:2018-6.4.6",
+      "doc_id": "ISO26262-2-2018",
+      "reference": "6.4.6.1",
+      "top_results": [
+        {
+          "canonical_ref": "6.4.6.1",
+          "anchor_identity": "ISO26262-2-2018:6_4_6_1:clause:6_4_6_1",
+          "page_start": 25,
+          "page_end": 25
+        },
+        {
+          "canonical_ref": "6.4.6.10",
+          "anchor_identity": "ISO26262-2-2018:6_4_6_10:clause:6_4_6_10",
+          "page_start": 27,
+          "page_end": 27
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-2:2018-6.4.7.2",
+      "doc_id": "ISO26262-2-2018",
+      "reference": "6.4.7.2",
+      "top_results": [
+        {
+          "canonical_ref": "6.4.7.2",
+          "anchor_identity": "ISO26262-2-2018:6_4_7_2:clause:6_4_7_2",
+          "page_start": 28,
+          "page_end": 28
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-2:2018-6.4.8",
+      "doc_id": "ISO26262-2-2018",
+      "reference": "6.4.8.1",
+      "top_results": [
+        {
+          "canonical_ref": "6.4.8.1",
+          "anchor_identity": "ISO26262-2-2018:6_4_8_1:clause:6_4_8_1",
+          "page_start": 28,
+          "page_end": 28
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-10.4.2",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "10.4.2",
+      "top_results": [
+        {
+          "canonical_ref": "10.4.2",
+          "anchor_identity": "ISO26262-6-2018:10_4_2:clause:10_4_2",
+          "page_start": 33,
+          "page_end": 33
+        },
+        {
+          "canonical_ref": "10.5.1",
+          "anchor_identity": "ISO26262-6-2018:10_5_1:clause:10_5_1",
+          "page_start": 36,
+          "page_end": 36
+        },
+        {
+          "canonical_ref": "10.5.3",
+          "anchor_identity": "ISO26262-6-2018:10_5_3:clause:10_5_3",
+          "page_start": 36,
+          "page_end": 36
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-10.4.5",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "10.4.5",
+      "top_results": [
+        {
+          "canonical_ref": "10.4.5",
+          "anchor_identity": "ISO26262-6-2018:10_4_5:clause:10_4_5",
+          "page_start": 35,
+          "page_end": 35
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-11.4",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "11.4",
+      "top_results": [
+        {
+          "canonical_ref": "11.4",
+          "anchor_identity": "ISO26262-6-2018:11_4:clause:11_4",
+          "page_start": 37,
+          "page_end": 37
+        },
+        {
+          "canonical_ref": "11.4.1",
+          "anchor_identity": "ISO26262-6-2018:11_4_1:clause:11_4_1",
+          "page_start": 37,
+          "page_end": 37
+        },
+        {
+          "canonical_ref": "11.4.2",
+          "anchor_identity": "ISO26262-6-2018:11_4_2:clause:11_4_2",
+          "page_start": 37,
+          "page_end": 37
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-5.4.2",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "5.4.2",
+      "top_results": [
+        {
+          "canonical_ref": "5.4.2",
+          "anchor_identity": "ISO26262-6-2018:5_4_2:clause:5_4_2",
+          "page_start": 14,
+          "page_end": 14
+        },
+        {
+          "canonical_ref": "5.4.3",
+          "anchor_identity": "ISO26262-6-2018:5_4_3:clause:5_4_3",
+          "page_start": 14,
+          "page_end": 15
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-5.4.3",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "5.4.3",
+      "top_results": [
+        {
+          "canonical_ref": "5.4.3",
+          "anchor_identity": "ISO26262-6-2018:5_4_3:clause:5_4_3",
+          "page_start": 14,
+          "page_end": 15
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-8.4.5",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "8.4.5",
+      "top_results": [
+        {
+          "canonical_ref": "8.4.5",
+          "anchor_identity": "ISO26262-6-2018:8_4_5:clause:8_4_5",
+          "page_start": 26,
+          "page_end": 27
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-9.4.2",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "9.4.2",
+      "top_results": [
+        {
+          "canonical_ref": "9.4.2",
+          "anchor_identity": "ISO26262-6-2018:9_4_2:clause:9_4_2",
+          "page_start": 28,
+          "page_end": 29
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-9.4.4",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "9.4.4",
+      "top_results": [
+        {
+          "canonical_ref": "9.4.4",
+          "anchor_identity": "ISO26262-6-2018:9_4_4:clause:9_4_4",
+          "page_start": 30,
+          "page_end": 30
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Annex-B",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Annex B",
+      "top_results": [
+        {
+          "canonical_ref": "Annex B",
+          "anchor_identity": "ISO26262-6-2018:annex_b:clause:annex_b",
+          "page_start": 44,
+          "page_end": 48
+        },
+        {
+          "canonical_ref": "Annex B",
+          "anchor_identity": "ISO26262-6-2018:annex_b:clause:annex_b",
+          "page_start": 44,
+          "page_end": 48
+        },
+        {
+          "canonical_ref": "Annex B",
+          "anchor_identity": "ISO26262-6-2018:annex_b:clause:annex_b",
+          "page_start": 44,
+          "page_end": 48
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Annex-C",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Annex C",
+      "top_results": [
+        {
+          "canonical_ref": "Annex C",
+          "anchor_identity": "ISO26262-6-2018:annex_c:clause:annex_c",
+          "page_start": 43,
+          "page_end": 44
+        },
+        {
+          "canonical_ref": "Annex C",
+          "anchor_identity": "ISO26262-6-2018:annex_c:clause:annex_c",
+          "page_start": 48,
+          "page_end": 54
+        },
+        {
+          "canonical_ref": "Annex C",
+          "anchor_identity": "ISO26262-6-2018:annex_c:clause:annex_c",
+          "page_start": 48,
+          "page_end": 54
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Annex-D",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Annex D",
+      "top_results": [
+        {
+          "canonical_ref": "Annex D",
+          "anchor_identity": "ISO26262-6-2018:annex_d:clause:annex_d",
+          "page_start": 54,
+          "page_end": 56
+        },
+        {
+          "canonical_ref": "Annex D",
+          "anchor_identity": "ISO26262-6-2018:annex_d:clause:annex_d",
+          "page_start": 61,
+          "page_end": 63
+        },
+        {
+          "canonical_ref": "Annex D",
+          "anchor_identity": "ISO26262-6-2018:annex_d:clause:annex_d",
+          "page_start": 63,
+          "page_end": 63
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-1",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 1",
+      "top_results": [
+        {
+          "canonical_ref": "Table 1",
+          "anchor_identity": "ISO26262-6-2018:table_1:clause:table_1",
+          "page_start": 15,
+          "page_end": 15
+        },
+        {
+          "canonical_ref": "Table 10",
+          "anchor_identity": "ISO26262-6-2018:table_10:clause:table_10",
+          "page_start": 34,
+          "page_end": 34
+        },
+        {
+          "canonical_ref": "Table 11",
+          "anchor_identity": "ISO26262-6-2018:table_11:clause:table_11",
+          "page_start": 34,
+          "page_end": 35
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-10",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 10",
+      "top_results": [
+        {
+          "canonical_ref": "Table 10",
+          "anchor_identity": "ISO26262-6-2018:table_10:clause:table_10",
+          "page_start": 34,
+          "page_end": 34
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-12",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 12",
+      "top_results": [
+        {
+          "canonical_ref": "Table 12",
+          "anchor_identity": "ISO26262-6-2018:table_12:clause:table_12",
+          "page_start": 35,
+          "page_end": 35
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-13",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 13",
+      "top_results": [
+        {
+          "canonical_ref": "Table 13",
+          "anchor_identity": "ISO26262-6-2018:table_13:clause:table_13",
+          "page_start": 37,
+          "page_end": 37
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-14",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 14",
+      "top_results": [
+        {
+          "canonical_ref": "Table 14",
+          "anchor_identity": "ISO26262-6-2018:table_14:clause:table_14",
+          "page_start": 37,
+          "page_end": 37
+        },
+        {
+          "canonical_ref": "11.4.2",
+          "anchor_identity": "ISO26262-6-2018:11_4_2:clause:11_4_2",
+          "page_start": 37,
+          "page_end": 37
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-15",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 15",
+      "top_results": [
+        {
+          "canonical_ref": "Table 15",
+          "anchor_identity": "ISO26262-6-2018:table_15:clause:table_15",
+          "page_start": 37,
+          "page_end": 38
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-6",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 6",
+      "top_results": [
+        {
+          "canonical_ref": "Table 6",
+          "anchor_identity": "ISO26262-6-2018:table_6:clause:table_6",
+          "page_start": 27,
+          "page_end": 27
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-7",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 7",
+      "top_results": [
+        {
+          "canonical_ref": "Table 7",
+          "anchor_identity": "ISO26262-6-2018:table_7:clause:table_7",
+          "page_start": 29,
+          "page_end": 30
+        },
+        {
+          "canonical_ref": "Table 7",
+          "anchor_identity": "ISO26262-6-2018:table_7:clause:table_7",
+          "page_start": 30,
+          "page_end": 30
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-6:2018-Table-9",
+      "doc_id": "ISO26262-6-2018",
+      "reference": "Table 9",
+      "top_results": [
+        {
+          "canonical_ref": "Table 9",
+          "anchor_identity": "ISO26262-6-2018:table_9:clause:table_9",
+          "page_start": 30,
+          "page_end": 31
+        },
+        {
+          "canonical_ref": "Table 9",
+          "anchor_identity": "ISO26262-6-2018:table_9:clause:table_9",
+          "page_start": 31,
+          "page_end": 31
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Clause-10",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "10",
+      "top_results": [
+        {
+          "canonical_ref": "10.1",
+          "anchor_identity": "ISO26262-8-2018:10_1:clause:10_1",
+          "page_start": 32,
+          "page_end": 32
+        },
+        {
+          "canonical_ref": "10.2",
+          "anchor_identity": "ISO26262-8-2018:10_2:clause:10_2",
+          "page_start": 32,
+          "page_end": 33
+        },
+        {
+          "canonical_ref": "10.3",
+          "anchor_identity": "ISO26262-8-2018:10_3:clause:10_3",
+          "page_start": 33,
+          "page_end": 33
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Clause-11",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "11",
+      "top_results": [
+        {
+          "canonical_ref": "11.1",
+          "anchor_identity": "ISO26262-8-2018:11_1:clause:11_1",
+          "page_start": 34,
+          "page_end": 34
+        },
+        {
+          "canonical_ref": "11.2",
+          "anchor_identity": "ISO26262-8-2018:11_2:clause:11_2",
+          "page_start": 34,
+          "page_end": 36
+        },
+        {
+          "canonical_ref": "11.3",
+          "anchor_identity": "ISO26262-8-2018:11_3:clause:11_3",
+          "page_start": 36,
+          "page_end": 36
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Clause-12",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "12",
+      "top_results": [
+        {
+          "canonical_ref": "12.1",
+          "anchor_identity": "ISO26262-8-2018:12_1:clause:12_1",
+          "page_start": 42,
+          "page_end": 42
+        },
+        {
+          "canonical_ref": "12.2",
+          "anchor_identity": "ISO26262-8-2018:12_2:clause:12_2",
+          "page_start": 42,
+          "page_end": 43
+        },
+        {
+          "canonical_ref": "12.3",
+          "anchor_identity": "ISO26262-8-2018:12_3:clause:12_3",
+          "page_start": 43,
+          "page_end": 43
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Clause-7",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "7",
+      "top_results": [
+        {
+          "canonical_ref": "5.4.4.7",
+          "anchor_identity": "ISO26262-8-2018:5_4_4_7:clause:5_4_4_7",
+          "page_start": 17,
+          "page_end": 17
+        },
+        {
+          "canonical_ref": "7.1",
+          "anchor_identity": "ISO26262-8-2018:7_1:clause:7_1",
+          "page_start": 24,
+          "page_end": 24
+        },
+        {
+          "canonical_ref": "7.2",
+          "anchor_identity": "ISO26262-8-2018:7_2:clause:7_2",
+          "page_start": 24,
+          "page_end": 25
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Clause-8",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "8",
+      "top_results": [
+        {
+          "canonical_ref": "5.4.4.8",
+          "anchor_identity": "ISO26262-8-2018:5_4_4_8:clause:5_4_4_8",
+          "page_start": 17,
+          "page_end": 18
+        },
+        {
+          "canonical_ref": "8.1",
+          "anchor_identity": "ISO26262-8-2018:8_1:clause:8_1",
+          "page_start": 26,
+          "page_end": 26
+        },
+        {
+          "canonical_ref": "8.2",
+          "anchor_identity": "ISO26262-8-2018:8_2:clause:8_2",
+          "page_start": 26,
+          "page_end": 26
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Clause-9",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "9",
+      "top_results": [
+        {
+          "canonical_ref": "9.1",
+          "anchor_identity": "ISO26262-8-2018:9_1:clause:9_1",
+          "page_start": 28,
+          "page_end": 29
+        },
+        {
+          "canonical_ref": "9.2",
+          "anchor_identity": "ISO26262-8-2018:9_2:clause:9_2",
+          "page_start": 29,
+          "page_end": 29
+        },
+        {
+          "canonical_ref": "9.3",
+          "anchor_identity": "ISO26262-8-2018:9_3:clause:9_3",
+          "page_start": 29,
+          "page_end": 30
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Table-3",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "Table 3",
+      "top_results": [
+        {
+          "canonical_ref": "Table 3",
+          "anchor_identity": "ISO26262-8-2018:table_3:clause:table_3",
+          "page_start": 39,
+          "page_end": 40
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Table-4",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "Table 4",
+      "top_results": [
+        {
+          "canonical_ref": "Table 4",
+          "anchor_identity": "ISO26262-8-2018:table_4:clause:table_4",
+          "page_start": 40,
+          "page_end": 40
+        },
+        {
+          "canonical_ref": "11.4.6.1",
+          "anchor_identity": "ISO26262-8-2018:11_4_6_1:clause:11_4_6_1",
+          "page_start": 40,
+          "page_end": 40
+        },
+        {
+          "canonical_ref": "11.4.7.1",
+          "anchor_identity": "ISO26262-8-2018:11_4_7_1:clause:11_4_7_1",
+          "page_start": 40,
+          "page_end": 41
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-8:2018-Table-5",
+      "doc_id": "ISO26262-8-2018",
+      "reference": "Table 5",
+      "top_results": [
+        {
+          "canonical_ref": "Table 5",
+          "anchor_identity": "ISO26262-8-2018:table_5:clause:table_5",
+          "page_start": 40,
+          "page_end": 40
+        },
+        {
+          "canonical_ref": "11.4.7.1",
+          "anchor_identity": "ISO26262-8-2018:11_4_7_1:clause:11_4_7_1",
+          "page_start": 40,
+          "page_end": 41
+        },
+        {
+          "canonical_ref": "11.4.9.1",
+          "anchor_identity": "ISO26262-8-2018:11_4_9_1:clause:11_4_9_1",
+          "page_start": 42,
+          "page_end": 42
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-9:2018-Clause-5",
+      "doc_id": "ISO26262-9-2018",
+      "reference": "5",
+      "top_results": [
+        {
+          "canonical_ref": "4.5",
+          "anchor_identity": "ISO26262-9-2018:4_5:clause:4_5",
+          "page_start": 11,
+          "page_end": 12
+        },
+        {
+          "canonical_ref": "5.1",
+          "anchor_identity": "ISO26262-9-2018:5_1:clause:5_1",
+          "page_start": 12,
+          "page_end": 12
+        },
+        {
+          "canonical_ref": "5.2",
+          "anchor_identity": "ISO26262-9-2018:5_2:clause:5_2",
+          "page_start": 12,
+          "page_end": 13
+        }
+      ]
+    },
+    {
+      "target_id": "ISO26262-9:2018-Clause-7",
+      "doc_id": "ISO26262-9-2018",
+      "reference": "7",
+      "top_results": [
+        {
+          "canonical_ref": "5.4.7",
+          "anchor_identity": "ISO26262-9-2018:5_4_7:clause:5_4_7",
+          "page_start": 14,
+          "page_end": 14
+        },
+        {
+          "canonical_ref": "7.1",
+          "anchor_identity": "ISO26262-9-2018:7_1:clause:7_1",
+          "page_start": 19,
+          "page_end": 19
+        },
+        {
+          "canonical_ref": "7.2",
+          "anchor_identity": "ISO26262-9-2018:7_2:clause:7_2",
+          "page_start": 19,
+          "page_end": 20
+        }
+      ]
+    }
+  ]
+}

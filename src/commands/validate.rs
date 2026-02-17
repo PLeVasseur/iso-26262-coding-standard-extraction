@@ -3,7 +3,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -40,6 +40,10 @@ const WP2_NOISE_LEAKAGE_GLOBAL_MAX: f64 = 0.001;
 const WP2_CITATION_TOP1_MIN: f64 = 0.99;
 const WP2_CITATION_TOP3_MIN: f64 = 1.0;
 const WP2_CITATION_PAGE_RANGE_MIN: f64 = 0.99;
+const WP2_CITATION_BASELINE_MODE_ENV: &str = "WP2_CITATION_BASELINE_MODE";
+const WP2_CITATION_BASELINE_PATH_ENV: &str = "WP2_CITATION_BASELINE_PATH";
+const WP2_CITATION_BASELINE_DECISION_ENV: &str = "WP2_CITATION_BASELINE_DECISION_ID";
+const WP2_CITATION_BASELINE_REASON_ENV: &str = "WP2_CITATION_BASELINE_REASON";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GoldSetManifest {
@@ -233,9 +237,11 @@ struct TableSemanticsReport {
 #[derive(Debug, Clone, Serialize, Default)]
 struct CitationParitySummaryReport {
     baseline_path: String,
+    baseline_mode: String,
     baseline_run_id: Option<String>,
     baseline_checksum: Option<String>,
     baseline_created: bool,
+    baseline_missing: bool,
     target_linked_total: usize,
     comparable_total: usize,
     top1_parity: Option<f64>,
@@ -439,6 +445,21 @@ impl Wp2GateStage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CitationBaselineMode {
+    Verify,
+    Bootstrap,
+}
+
+impl CitationBaselineMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Verify => "verify",
+            Self::Bootstrap => "bootstrap",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CitationParityIdentity {
     canonical_ref: String,
@@ -481,6 +502,10 @@ struct CitationParityBaseline {
     run_id: String,
     generated_at: String,
     db_schema_version: Option<String>,
+    #[serde(default)]
+    decision_id: Option<String>,
+    #[serde(default)]
+    change_reason: Option<String>,
     target_linked_count: usize,
     query_options: String,
     checksum: String,
@@ -492,7 +517,10 @@ struct CitationParityArtifact {
     manifest_version: u32,
     run_id: String,
     generated_at: String,
+    baseline_path: String,
+    baseline_mode: String,
     baseline_checksum: Option<String>,
+    baseline_missing: bool,
     target_linked_count: usize,
     comparable_count: usize,
     top1_parity: Option<f64>,
@@ -562,6 +590,15 @@ pub fn run(args: ValidateArgs) -> Result<()> {
         effective_stage: wp2_stage.as_str().to_string(),
         enforcement_mode: wp2_stage.mode_label().to_string(),
     };
+    let citation_baseline_mode = resolve_citation_baseline_mode();
+    let citation_baseline_path = resolve_citation_baseline_path();
+    if wp2_stage == Wp2GateStage::B && citation_baseline_mode == CitationBaselineMode::Bootstrap {
+        bail!(
+            "{}=bootstrap is not allowed with WP2_GATE_STAGE=B; run Stage A first to bootstrap lockfile at {}",
+            WP2_CITATION_BASELINE_MODE_ENV,
+            citation_baseline_path.display()
+        );
+    }
     let ingest_snapshots = load_ingest_snapshots(&manifest_dir).unwrap_or_default();
     let latest_ingest_snapshot = ingest_snapshots.last().cloned();
     let previous_ingest_snapshot = if ingest_snapshots.len() > 1 {
@@ -622,6 +659,8 @@ pub fn run(args: ValidateArgs) -> Result<()> {
         &run_id,
         &gold_manifest.gold_references,
         wp2_stage,
+        &citation_baseline_path,
+        citation_baseline_mode,
         latest_ingest_snapshot.as_ref(),
         previous_ingest_snapshot.as_ref(),
     )?;
@@ -827,6 +866,45 @@ fn resolve_wp2_gate_stage() -> Wp2GateStage {
     }
 }
 
+fn resolve_citation_baseline_mode() -> CitationBaselineMode {
+    parse_citation_baseline_mode(
+        std::env::var(WP2_CITATION_BASELINE_MODE_ENV)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn resolve_citation_baseline_path() -> PathBuf {
+    parse_citation_baseline_path(
+        std::env::var(WP2_CITATION_BASELINE_PATH_ENV)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_citation_baseline_mode(value: Option<&str>) -> CitationBaselineMode {
+    match value {
+        Some(value)
+            if value.trim().eq_ignore_ascii_case("bootstrap")
+                || value.trim().eq_ignore_ascii_case("rotate") =>
+        {
+            CitationBaselineMode::Bootstrap
+        }
+        _ => CitationBaselineMode::Verify,
+    }
+}
+
+fn parse_citation_baseline_path(value: Option<&str>) -> PathBuf {
+    if let Some(value) = value {
+        let candidate = value.trim();
+        if !candidate.is_empty() {
+            return PathBuf::from(candidate);
+        }
+    }
+
+    PathBuf::from("manifests").join("citation_parity_baseline.lock.json")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_wp2_assessment(
     connection: &Connection,
@@ -834,6 +912,8 @@ fn build_wp2_assessment(
     run_id: &str,
     refs: &[GoldReference],
     stage: Wp2GateStage,
+    citation_baseline_path: &Path,
+    citation_baseline_mode: CitationBaselineMode,
     latest_snapshot: Option<&NamedIngestRunSnapshot>,
     previous_snapshot: Option<&NamedIngestRunSnapshot>,
 ) -> Result<Wp2Assessment> {
@@ -847,10 +927,8 @@ fn build_wp2_assessment(
     let mut hierarchy = HierarchySemanticsReport::default();
     let mut table_semantics = TableSemanticsReport::default();
     let mut citation_parity = CitationParitySummaryReport {
-        baseline_path: manifest_dir
-            .join("citation_parity_baseline.json")
-            .display()
-            .to_string(),
+        baseline_path: citation_baseline_path.display().to_string(),
+        baseline_mode: citation_baseline_mode.as_str().to_string(),
         ..CitationParitySummaryReport::default()
     };
 
@@ -975,6 +1053,8 @@ fn build_wp2_assessment(
     let parity_artifacts = build_citation_parity_artifacts(
         connection,
         manifest_dir,
+        citation_baseline_path,
+        citation_baseline_mode,
         run_id,
         refs,
         latest_snapshot,
@@ -982,6 +1062,7 @@ fn build_wp2_assessment(
     citation_parity.baseline_run_id = parity_artifacts.baseline_run_id;
     citation_parity.baseline_checksum = parity_artifacts.baseline_checksum.clone();
     citation_parity.baseline_created = parity_artifacts.baseline_created;
+    citation_parity.baseline_missing = parity_artifacts.baseline_missing;
     citation_parity.target_linked_total = parity_artifacts.target_linked_total;
     citation_parity.comparable_total = parity_artifacts.comparable_total;
     citation_parity.top1_parity = parity_artifacts.top1_parity;
@@ -1113,7 +1194,7 @@ fn build_wp2_assessment(
         result: wp2_result(stage, q029_hard_fail, q029_stage_b_fail).to_string(),
     });
 
-    let q030_stage_b_fail = citation_parity.baseline_created
+    let q030_stage_b_fail = citation_parity.baseline_missing
         || citation_parity.comparable_total == 0
         || citation_parity
             .top1_parity
@@ -1177,10 +1258,20 @@ fn build_wp2_assessment(
             );
         }
         if q030_stage_b_fail {
-            citation_parity.warnings.push(
-                "Q-030 Stage A warning: citation parity is below Stage B thresholds or baseline was just created."
-                    .to_string(),
-            );
+            if citation_parity.baseline_missing {
+                citation_parity.warnings.push(
+                    format!(
+                        "Q-030 Stage A warning: citation lockfile is missing at {}; bootstrap with {}=bootstrap.",
+                        citation_parity.baseline_path,
+                        WP2_CITATION_BASELINE_MODE_ENV
+                    ),
+                );
+            } else {
+                citation_parity.warnings.push(
+                    "Q-030 Stage A warning: citation parity is below Stage B thresholds."
+                        .to_string(),
+                );
+            }
         }
     }
 
@@ -1209,7 +1300,7 @@ fn build_wp2_assessment(
                     "Reduce normalization noise leakage (global and target-linked) and keep dehyphenation behavior within fixture tolerance.".to_string(),
                 ),
                 "Q-030" => Some(
-                    "Regressions in citation parity must be resolved before Stage B; verify baseline continuity and tie-aware top-k parity.".to_string(),
+                    "Regressions in citation parity must be resolved before Stage B; verify lockfile continuity and tie-aware top-k parity (bootstrap with WP2_CITATION_BASELINE_MODE=bootstrap in Stage A when missing).".to_string(),
                 ),
                 _ => None,
             };
@@ -1853,6 +1944,7 @@ struct CitationParityComputation {
     baseline_run_id: Option<String>,
     baseline_checksum: Option<String>,
     baseline_created: bool,
+    baseline_missing: bool,
     target_linked_total: usize,
     comparable_total: usize,
     top1_parity: Option<f64>,
@@ -1863,22 +1955,31 @@ struct CitationParityComputation {
 fn build_citation_parity_artifacts(
     connection: &Connection,
     manifest_dir: &Path,
+    baseline_path: &Path,
+    baseline_mode: CitationBaselineMode,
     run_id: &str,
     refs: &[GoldReference],
     latest_snapshot: Option<&NamedIngestRunSnapshot>,
 ) -> Result<CitationParityComputation> {
-    let baseline_path = manifest_dir.join("citation_parity_baseline.json");
     let report_path = manifest_dir.join("citation_parity_report.json");
     let current_entries = collect_citation_parity_entries(connection, refs)?;
     let current_checksum = checksum_citation_entries(&current_entries);
 
     let mut baseline_created = false;
-    let baseline = if baseline_path.exists() {
-        let raw = fs::read(&baseline_path)
-            .with_context(|| format!("failed to read {}", baseline_path.display()))?;
-        serde_json::from_slice::<CitationParityBaseline>(&raw)
-            .with_context(|| format!("failed to parse {}", baseline_path.display()))?
-    } else {
+    let mut baseline_missing = false;
+    let (decision_id, change_reason) = resolve_citation_baseline_rationale();
+
+    let baseline = if baseline_mode == CitationBaselineMode::Bootstrap {
+        if baseline_path.exists() && (decision_id.is_none() || change_reason.is_none()) {
+            bail!(
+                "{}=bootstrap would rotate existing lockfile at {}; set both {} and {}",
+                WP2_CITATION_BASELINE_MODE_ENV,
+                baseline_path.display(),
+                WP2_CITATION_BASELINE_DECISION_ENV,
+                WP2_CITATION_BASELINE_REASON_ENV
+            );
+        }
+
         baseline_created = true;
         let baseline = CitationParityBaseline {
             manifest_version: 1,
@@ -1886,20 +1987,32 @@ fn build_citation_parity_artifacts(
             generated_at: now_utc_string(),
             db_schema_version: latest_snapshot
                 .and_then(|snapshot| snapshot.snapshot.db_schema_version.clone()),
+            decision_id,
+            change_reason,
             target_linked_count: current_entries.len(),
             query_options: "doc+reference deterministic top3".to_string(),
             checksum: current_checksum.clone(),
             entries: current_entries.clone(),
         };
-        write_json_pretty(&baseline_path, &baseline)?;
-        baseline
+        write_citation_parity_lockfile(baseline_path, &baseline)?;
+        Some(baseline)
+    } else if baseline_path.exists() {
+        Some(read_citation_parity_lockfile(baseline_path)?)
+    } else {
+        baseline_missing = true;
+        None
     };
 
-    let baseline_map = baseline
-        .entries
-        .iter()
-        .map(|entry| (entry.target_id.clone(), entry))
-        .collect::<HashMap<String, &CitationParityEntry>>();
+    let baseline_map: HashMap<String, &CitationParityEntry> = baseline
+        .as_ref()
+        .map(|value| {
+            value
+                .entries
+                .iter()
+                .map(|entry| (entry.target_id.clone(), entry))
+                .collect::<HashMap<String, &CitationParityEntry>>()
+        })
+        .unwrap_or_default();
 
     let mut comparable = 0usize;
     let mut top1_ok = 0usize;
@@ -1960,7 +2073,10 @@ fn build_citation_parity_artifacts(
         manifest_version: 1,
         run_id: run_id.to_string(),
         generated_at: now_utc_string(),
-        baseline_checksum: Some(baseline.checksum.clone()),
+        baseline_path: baseline_path.display().to_string(),
+        baseline_mode: baseline_mode.as_str().to_string(),
+        baseline_checksum: baseline.as_ref().map(|value| value.checksum.clone()),
+        baseline_missing,
         target_linked_count: current_entries.len(),
         comparable_count: comparable,
         top1_parity,
@@ -1972,15 +2088,90 @@ fn build_citation_parity_artifacts(
     write_json_pretty(&report_path, &artifact)?;
 
     Ok(CitationParityComputation {
-        baseline_run_id: Some(baseline.run_id),
-        baseline_checksum: Some(baseline.checksum),
+        baseline_run_id: baseline.as_ref().map(|value| value.run_id.clone()),
+        baseline_checksum: baseline.as_ref().map(|value| value.checksum.clone()),
         baseline_created,
+        baseline_missing,
         target_linked_total: current_entries.len(),
         comparable_total: comparable,
         top1_parity,
         top3_containment,
         page_range_parity,
     })
+}
+
+fn resolve_citation_baseline_rationale() -> (Option<String>, Option<String>) {
+    let decision_id = std::env::var(WP2_CITATION_BASELINE_DECISION_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let reason = std::env::var(WP2_CITATION_BASELINE_REASON_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    (decision_id, reason)
+}
+
+fn write_citation_parity_lockfile(path: &Path, baseline: &CitationParityBaseline) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create lockfile directory {}", parent.display()))?;
+    }
+
+    write_json_pretty(path, baseline)
+}
+
+fn read_citation_parity_lockfile(path: &Path) -> Result<CitationParityBaseline> {
+    let raw = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let parsed = serde_json::from_slice::<serde_json::Value>(&raw)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    ensure_citation_baseline_metadata_only(&parsed)?;
+    serde_json::from_value::<CitationParityBaseline>(parsed)
+        .with_context(|| format!("failed to decode {}", path.display()))
+}
+
+fn ensure_citation_baseline_metadata_only(value: &serde_json::Value) -> Result<()> {
+    const FORBIDDEN_KEYS: &[&str] = &[
+        "text",
+        "snippet",
+        "heading",
+        "chunk_text",
+        "table_md",
+        "table_csv",
+        "raw_text",
+        "content",
+    ];
+
+    let mut stack = vec![("$".to_string(), value)];
+    while let Some((path, node)) = stack.pop() {
+        match node {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    let lowered = key.to_ascii_lowercase();
+                    if FORBIDDEN_KEYS.iter().any(|forbidden| *forbidden == lowered) {
+                        bail!(
+                            "citation parity lockfile contains forbidden text-bearing key '{}' at {}",
+                            key,
+                            path
+                        );
+                    }
+
+                    stack.push((format!("{}.{}", path, key), child));
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for (index, child) in values.iter().enumerate() {
+                    stack.push((format!("{}[{}]", path, index), child));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn collect_citation_parity_entries(
@@ -3792,7 +3983,9 @@ fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_target_parts_from_command, resolve_processed_parts, GoldReference, IngestRunSnapshot,
+        ensure_citation_baseline_metadata_only, parse_citation_baseline_mode,
+        parse_citation_baseline_path, parse_target_parts_from_command, resolve_processed_parts,
+        CitationBaselineMode, GoldReference, IngestRunSnapshot,
     };
 
     #[test]
@@ -3829,5 +4022,55 @@ mod tests {
         let snapshot = IngestRunSnapshot::default();
         let parts = resolve_processed_parts(&snapshot, &[2, 6, 8, 9]);
         assert_eq!(parts, vec![2, 6, 8, 9]);
+    }
+
+    #[test]
+    fn parse_citation_baseline_mode_supports_bootstrap_aliases() {
+        assert_eq!(
+            parse_citation_baseline_mode(Some("bootstrap")),
+            CitationBaselineMode::Bootstrap
+        );
+        assert_eq!(
+            parse_citation_baseline_mode(Some("RoTaTe")),
+            CitationBaselineMode::Bootstrap
+        );
+        assert_eq!(
+            parse_citation_baseline_mode(Some("verify")),
+            CitationBaselineMode::Verify
+        );
+        assert_eq!(parse_citation_baseline_mode(None), CitationBaselineMode::Verify);
+    }
+
+    #[test]
+    fn parse_citation_baseline_path_defaults_to_repo_lockfile() {
+        let path = parse_citation_baseline_path(None);
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("manifests/citation_parity_baseline.lock.json")
+        );
+
+        let custom = parse_citation_baseline_path(Some("/tmp/custom.lock.json"));
+        assert_eq!(custom, std::path::PathBuf::from("/tmp/custom.lock.json"));
+    }
+
+    #[test]
+    fn citation_baseline_schema_guard_rejects_text_payload_fields() {
+        let payload = serde_json::json!({
+            "manifest_version": 1,
+            "entries": [
+                {
+                    "target_id": "t1",
+                    "text": "forbidden"
+                }
+            ]
+        });
+
+        let error = ensure_citation_baseline_metadata_only(&payload)
+            .expect_err("schema guard should reject text-bearing fields");
+        assert!(
+            error.to_string().contains("forbidden text-bearing key"),
+            "unexpected error: {}",
+            error
+        );
     }
 }

@@ -74,6 +74,27 @@ Quick mode tolerates `Q-022` freshness failures (expected when only Part 6 is re
 - `WP2_GATE_STAGE=B`: hard gate mode.
   - Stage B-only WP2 thresholds are enforced as check failures.
 
+Citation parity lockfile policy (`Q-030`):
+
+- Canonical lockfile path defaults to `manifests/citation_parity_baseline.lock.json` (repo-tracked).
+- Lockfile content is metadata-only (target ids, references, anchor identities, and page ranges), not extracted text/snippets.
+- Stage B hard-fails when this lockfile is missing.
+- Standard `validate` runs do not auto-create the lockfile.
+- Explicit bootstrap/rotation is required:
+
+```bash
+WP2_CITATION_BASELINE_MODE=bootstrap WP2_GATE_STAGE=A cargo run -- validate --cache-root .cache/iso26262
+```
+
+When rotating an existing lockfile, provide rationale metadata:
+
+```bash
+WP2_CITATION_BASELINE_MODE=bootstrap \
+WP2_CITATION_BASELINE_DECISION_ID=D-0123 \
+WP2_CITATION_BASELINE_REASON="retargeted corpus after approved source update" \
+WP2_GATE_STAGE=A cargo run -- validate --cache-root .cache/iso26262
+```
+
 Examples:
 
 ```bash
@@ -114,6 +135,10 @@ Optional environment overrides:
 - `EXPECTED_DB_SCHEMA_VERSION` (default `0.3.0`)
 - `REBUILD_ON_COMPAT_MISMATCH=1` to archive DB and rebuild instead of hard-blocking
 - `ALLOW_BLOCKED_RESUME=1` to explicitly clear a blocked run-state and restart from `R04`
+- `WP2_CITATION_BASELINE_MODE` (`verify` default, `bootstrap` to create/rotate lockfile)
+- `WP2_CITATION_BASELINE_PATH` to override lockfile location (default `manifests/citation_parity_baseline.lock.json`)
+- `WP2_CITATION_BASELINE_DECISION_ID` required for lockfile rotation in bootstrap mode
+- `WP2_CITATION_BASELINE_REASON` required for lockfile rotation in bootstrap mode
 
 ### New-session bootstrap
 
@@ -137,4 +162,10 @@ FULL_TARGET_SET=1 TARGET_PARTS="2 6 8 9" WP2_GATE_STAGE=A scripts/refresh_qualit
 
 ```bash
 WP2_GATE_STAGE=B cargo run -- validate --cache-root .cache/iso26262
+```
+
+If Stage B reports missing citation parity lockfile, bootstrap once in Stage A:
+
+```bash
+WP2_CITATION_BASELINE_MODE=bootstrap WP2_GATE_STAGE=A cargo run -- validate --cache-root .cache/iso26262
 ```
