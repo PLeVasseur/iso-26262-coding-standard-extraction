@@ -1245,10 +1245,12 @@ fn insert_chunks(
                     Some(&chunk.reference),
                     chunk_anchor_order,
                 ));
-                let chunk_page_printed_start =
-                    printed_page_label_for(&page_printed_labels, chunk.page_start);
-                let chunk_page_printed_end =
-                    printed_page_label_for(&page_printed_labels, chunk.page_end);
+                let (chunk_page_printed_start, chunk_page_printed_end) =
+                    printed_page_labels_for_range(
+                        &page_printed_labels,
+                        chunk.page_start,
+                        chunk.page_end,
+                    );
 
                 chunk_statement.execute(params![
                     chunk_id,
@@ -1779,6 +1781,7 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
     }
 
     normalize_table_rows_for_alignment(&mut rows);
+    backfill_asil_marker_row_ratings(&mut rows, &body_lines);
 
     let mut structured = rows.len() >= 2 && rows.iter().any(|cells| cells.len() > 1);
     let reconstructed = reconstruct_table_rows_from_markers(&body_lines);
@@ -1794,6 +1797,7 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
         ) {
             rows = reconstructed;
             normalize_table_rows_for_alignment(&mut rows);
+            backfill_asil_marker_row_ratings(&mut rows, &body_lines);
             structured = rows.len() >= 2 && rows.iter().any(|cells| cells.len() > 1);
         } else if !structured
             && reconstructed.len() >= 2
@@ -1801,6 +1805,7 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
         {
             rows = reconstructed;
             normalize_table_rows_for_alignment(&mut rows);
+            backfill_asil_marker_row_ratings(&mut rows, &body_lines);
             structured = true;
         }
     }
@@ -1829,6 +1834,7 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
 fn normalize_table_rows_for_alignment(rows: &mut Vec<Vec<String>>) {
     merge_single_cell_continuations(rows);
     split_marker_rows_with_trailing_ratings(rows);
+    redistribute_dense_marker_ratings(rows);
 }
 
 fn merge_single_cell_continuations(rows: &mut Vec<Vec<String>>) {
@@ -1913,8 +1919,144 @@ fn split_marker_rows_with_trailing_ratings(rows: &mut [Vec<String>]) {
     }
 }
 
+fn redistribute_dense_marker_ratings(rows: &mut [Vec<String>]) {
+    for row_index in 0..rows.len() {
+        let Some(first_cell) = rows[row_index].first() else {
+            continue;
+        };
+        if parse_table_marker_token(first_cell).is_none() {
+            continue;
+        }
+
+        let rating_pool = rows[row_index]
+            .iter()
+            .skip(2)
+            .map(|cell| cell.trim_matches(['(', ')', '.', ':', ';', ',']))
+            .filter(|cell| is_table_rating_token(cell))
+            .map(|cell| cell.to_string())
+            .collect::<Vec<String>>();
+        if rating_pool.len() < 8 {
+            continue;
+        }
+
+        let mut marker_block = vec![row_index];
+        let mut cursor = row_index;
+        while cursor > 0 {
+            let previous = cursor - 1;
+            let is_marker = rows[previous]
+                .first()
+                .map(|value| parse_table_marker_token(value).is_some())
+                .unwrap_or(false);
+            if !is_marker {
+                break;
+            }
+
+            marker_block.push(previous);
+            cursor = previous;
+        }
+        marker_block.reverse();
+        if marker_block.len() < 2 {
+            continue;
+        }
+
+        rows[row_index].truncate(2);
+        let mut assignment_index = 0usize;
+        for rating in rating_pool {
+            while assignment_index < marker_block.len()
+                && rows[marker_block[assignment_index]].len() >= 6
+            {
+                assignment_index += 1;
+            }
+
+            if assignment_index >= marker_block.len() {
+                rows[row_index].push(rating);
+                continue;
+            }
+
+            rows[marker_block[assignment_index]].push(rating);
+        }
+    }
+}
+
 fn is_table_rating_token(token: &str) -> bool {
     matches!(token, "+" | "++" | "-" | "--" | "+/-" | "+/−" | "−/+" | "o")
+}
+
+fn is_footnote_marker_line(line: &str) -> bool {
+    let trimmed = line.trim_matches(['(', ')', '.', ':', ';', ',']).trim();
+    trimmed.len() == 1
+        && trimmed
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_lowercase())
+            .unwrap_or(false)
+}
+
+fn backfill_asil_marker_row_ratings(rows: &mut [Vec<String>], body_lines: &[&str]) {
+    if !looks_like_asil_matrix(body_lines) {
+        return;
+    }
+
+    let mut rating_pool = body_lines
+        .iter()
+        .flat_map(|line| line.split_whitespace())
+        .map(|token| token.trim_matches(['(', ')', '.', ':', ';', ',']))
+        .filter(|token| is_table_rating_token(token))
+        .map(|token| token.to_string())
+        .collect::<Vec<String>>();
+
+    if rating_pool.is_empty() {
+        return;
+    }
+
+    for row in rows {
+        let is_marker_row = row
+            .first()
+            .map(|value| parse_table_marker_token(value).is_some())
+            .unwrap_or(false);
+        if !is_marker_row {
+            continue;
+        }
+
+        let has_ratings = row.iter().skip(2).any(|cell| {
+            cell.split_whitespace()
+                .map(|token| token.trim_matches(['(', ')', '.', ':', ';', ',']))
+                .any(is_table_rating_token)
+        });
+        if has_ratings {
+            continue;
+        }
+
+        let Some(rating) = rating_pool.pop() else {
+            break;
+        };
+        row.push(rating);
+    }
+}
+
+fn looks_like_asil_matrix(body_lines: &[&str]) -> bool {
+    let has_asil_header = body_lines
+        .iter()
+        .any(|line| line.to_ascii_uppercase().contains("ASIL"));
+    if !has_asil_header {
+        return false;
+    }
+
+    let mut columns = HashSet::<char>::new();
+    for line in body_lines {
+        let trimmed = line.trim();
+        if trimmed.len() != 1 {
+            continue;
+        }
+
+        if let Some(ch) = trimmed.chars().next().map(|value| value.to_ascii_uppercase())
+            && matches!(ch, 'A' | 'B' | 'C' | 'D')
+        {
+            columns.insert(ch);
+        }
+    }
+
+    columns.len() == 4
 }
 
 fn analyze_table_rows(rows: &[Vec<String>]) -> TableQualityCounters {
@@ -2112,6 +2254,10 @@ fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
             continue;
         }
 
+        if !pending_markers.is_empty() && is_footnote_marker_line(line) {
+            continue;
+        }
+
         if !pending_markers.is_empty() {
             flush_current(&mut rows, &mut current_row);
             let marker = pending_markers.remove(0);
@@ -2222,11 +2368,19 @@ fn extract_body_lines_preserve_blanks<'a>(text: &'a str, heading: &str) -> Vec<&
 }
 
 fn line_is_noise(line: &str) -> bool {
-    let lower = line.to_lowercase();
-    lower.contains("license")
-        || lower.contains("downloaded:")
-        || lower.contains("single user")
-        || lower.contains("networking prohibited")
+    contains_iso_watermark_noise(line)
+}
+
+fn contains_iso_watermark_noise(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let has_store_download = lower.contains("iso store order") && lower.contains("downloaded:");
+    let has_single_user_notice =
+        (lower.contains("single user licence only") || lower.contains("single user license only"))
+            && lower.contains("networking prohibited");
+    let has_license_banner =
+        lower.contains("licensed to") && lower.contains("license #") && lower.contains("downloaded:");
+
+    has_store_download || has_single_user_notice || has_license_banner
 }
 
 fn split_table_cells(line: &str, cell_split_regex: &Regex) -> Vec<String> {
@@ -2439,7 +2593,7 @@ fn parse_list_items(
 ) -> (Vec<ListItemDraft>, bool, bool) {
     let body_lines = extract_body_lines_preserve_blanks(text, heading);
     let mut items = Vec::<ListItemDraft>::new();
-    let mut list_like_lines = 0usize;
+    let mut list_marker_candidates = 0usize;
     let mut active_item: Option<ListItemDraft> = None;
 
     for raw_line in body_lines {
@@ -2455,8 +2609,8 @@ fn parse_list_items(
         let list_capture = list_item_regex.captures(line);
         let note_capture = note_item_regex.captures(line);
 
-        if list_capture.is_some() || note_capture.is_some() {
-            list_like_lines += 1;
+        if list_capture.is_some() {
+            list_marker_candidates += 1;
         }
 
         if let Some(captures) = list_capture {
@@ -2518,8 +2672,9 @@ fn parse_list_items(
 
     reorder_list_items_for_marker_sequence(&mut items);
 
-    let used_fallback = list_like_lines > 0 && items.is_empty();
-    (items, used_fallback, list_like_lines > 0)
+    let had_list_candidates = list_marker_candidates > 0;
+    let used_fallback = had_list_candidates && items.is_empty();
+    (items, used_fallback, had_list_candidates)
 }
 
 fn parse_note_items(
@@ -3361,6 +3516,8 @@ fn apply_page_normalization(extraction: &mut ExtractedPages) {
             .map(|line| line.to_string())
             .collect::<Vec<String>>();
 
+        lines.retain(|line| !line_is_noise(line));
+
         if let Some(index) = first_nonempty_line_index(&lines) {
             let candidate = normalize_edge_line(&lines[index]);
             if !candidate.is_empty() && header_candidates.contains(&candidate) {
@@ -3460,6 +3617,47 @@ fn printed_page_label_for(labels: &[Option<String>], page_pdf: i64) -> Option<St
     labels
         .get((page_pdf - 1) as usize)
         .and_then(|label| label.clone())
+}
+
+fn printed_page_labels_for_range(
+    labels: &[Option<String>],
+    page_start: i64,
+    page_end: i64,
+) -> (Option<String>, Option<String>) {
+    if labels.is_empty() || (page_start <= 0 && page_end <= 0) {
+        return (None, None);
+    }
+
+    let mut start = if page_start > 0 { page_start } else { page_end };
+    let mut end = if page_end > 0 { page_end } else { page_start };
+    if start <= 0 || end <= 0 {
+        return (None, None);
+    }
+    if start > end {
+        std::mem::swap(&mut start, &mut end);
+    }
+
+    let first_index = (start - 1) as usize;
+    if first_index >= labels.len() {
+        return (None, None);
+    }
+    let last_index = ((end - 1) as usize).min(labels.len().saturating_sub(1));
+
+    let mut first_detected = None;
+    let mut last_detected = None;
+    for label in labels[first_index..=last_index].iter().flatten() {
+        let normalized = label.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+
+        if first_detected.is_none() {
+            first_detected = Some(normalized.to_string());
+        }
+        last_detected = Some(normalized.to_string());
+    }
+
+    (first_detected, last_detected)
 }
 
 fn detect_repeated_edge_lines(pages: &[String], header: bool) -> HashSet<String> {
@@ -3873,6 +4071,18 @@ mod tests {
     }
 
     #[test]
+    fn reconstruct_table_rows_skips_footnote_markers_before_descriptions() {
+        let lines = vec!["1b 1c", "a", "b", "Interface test", "Fault injection test"]; 
+
+        let rows = reconstruct_table_rows_from_markers(&lines);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "1b");
+        assert_eq!(rows[0][1], "Interface test");
+        assert_eq!(rows[1][0], "1c");
+        assert_eq!(rows[1][1], "Fault injection test");
+    }
+
+    #[test]
     fn analyze_table_rows_tracks_sparse_and_overloaded_patterns() {
         let rows = vec![
             vec![
@@ -3952,6 +4162,47 @@ mod tests {
     }
 
     #[test]
+    fn redistribute_dense_marker_ratings_spreads_tokens_to_previous_rows() {
+        let mut rows = vec![
+            vec!["1a".to_string(), "First".to_string(), "++".to_string()],
+            vec!["1b".to_string(), "Second".to_string()],
+            vec!["1c".to_string(), "Third".to_string()],
+            vec![
+                "1d".to_string(),
+                "Fourth".to_string(),
+                "++".to_string(),
+                "+".to_string(),
+                "++".to_string(),
+                "+".to_string(),
+                "++".to_string(),
+                "+".to_string(),
+                "++".to_string(),
+                "+".to_string(),
+            ],
+        ];
+
+        redistribute_dense_marker_ratings(&mut rows);
+
+        assert!(rows[1].len() > 2);
+        assert!(rows[2].len() > 2);
+        assert!(rows[3].len() <= 6);
+    }
+
+    #[test]
+    fn backfill_asil_marker_row_ratings_assigns_missing_marker_ratings() {
+        let mut rows = vec![
+            vec!["1a".to_string(), "First principle".to_string()],
+            vec!["1b".to_string(), "Second principle".to_string()],
+        ];
+        let body_lines = vec!["ASIL", "A", "B", "C", "D", "++", "+", "++", "+"];
+
+        backfill_asil_marker_row_ratings(&mut rows, &body_lines);
+
+        assert_eq!(rows[0].len(), 3);
+        assert_eq!(rows[1].len(), 3);
+    }
+
+    #[test]
     fn infer_table_header_rows_detects_first_non_marker_row() {
         let rows = vec![
             vec!["Requirement".to_string(), "ASIL A".to_string()],
@@ -4004,6 +4255,24 @@ mod tests {
         assert_eq!(list_items[1].depth, 2);
         assert_eq!(list_items[2].marker_style, "bullet");
         assert_eq!(list_items[2].depth, 3);
+    }
+
+    #[test]
+    fn parse_list_items_note_only_text_is_not_counted_as_candidate() {
+        let list_item_regex = Regex::new(
+            r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
+        )
+        .expect("list regex compiles");
+        let note_item_regex = Regex::new(r"^(?i)(?P<marker>NOTE(?:\s+\d+)?)(?:\s+(?P<body>.+))?$")
+            .expect("note regex compiles");
+
+        let text = "6.4 Heading\nNOTE 1 This is informative guidance\nNOTE 2 Another informative note";
+        let (list_items, fallback, had_candidates) =
+            parse_list_items(text, "6.4 Heading", &list_item_regex, &note_item_regex);
+
+        assert!(list_items.is_empty());
+        assert!(!had_candidates);
+        assert!(!fallback);
     }
 
     #[test]
@@ -4132,6 +4401,21 @@ mod tests {
     }
 
     #[test]
+    fn apply_page_normalization_removes_iso_watermark_lines() {
+        let mut extraction = ExtractedPages {
+            pages: vec![
+                "ISO Store Order: OP-1022919 license #1/ Downloaded: 2026-02-14\nSingle user licence only, copying and networking prohibited.\nFunctional safety requirement"
+                    .to_string(),
+            ],
+            ..ExtractedPages::default()
+        };
+
+        apply_page_normalization(&mut extraction);
+
+        assert_eq!(extraction.pages[0], "Functional safety requirement");
+    }
+
+    #[test]
     fn detect_printed_page_label_supports_numeric_and_roman_labels() {
         let numeric_page = "Some line\nPage 12\n";
         let roman_page = "Some line\nii\n";
@@ -4144,6 +4428,19 @@ mod tests {
             detect_printed_page_label(roman_page),
             Some("ii".to_string())
         );
+    }
+
+    #[test]
+    fn printed_page_labels_for_range_uses_detected_labels_inside_chunk_range() {
+        let labels = vec![None, Some("25".to_string()), None, Some("27".to_string())];
+
+        let (start, end) = printed_page_labels_for_range(&labels, 1, 4);
+        assert_eq!(start.as_deref(), Some("25"));
+        assert_eq!(end.as_deref(), Some("27"));
+
+        let (single_start, single_end) = printed_page_labels_for_range(&labels, 1, 3);
+        assert_eq!(single_start.as_deref(), Some("25"));
+        assert_eq!(single_end.as_deref(), Some("25"));
     }
 
     #[test]

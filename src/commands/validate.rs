@@ -936,9 +936,10 @@ fn build_wp2_assessment(
         .map(|snapshot| snapshot.snapshot.counts.clone())
         .unwrap_or_default();
 
-    extraction.processed_pages = latest_counts.text_layer_page_count
-        + latest_counts.ocr_page_count
-        + latest_counts.empty_page_count;
+    extraction.processed_pages = latest_counts.text_layer_page_count + latest_counts.ocr_page_count;
+    if extraction.processed_pages == 0 {
+        extraction.processed_pages = latest_counts.empty_page_count;
+    }
     extraction.ocr_page_ratio = ratio(latest_counts.ocr_page_count, extraction.processed_pages);
 
     let current_page_provenance =
@@ -1688,10 +1689,14 @@ fn compute_normalization_metrics(
 
 fn contains_normalization_noise(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    lower.contains("license")
-        || lower.contains("downloaded:")
-        || lower.contains("single user")
-        || lower.contains("networking prohibited")
+    let has_store_download = lower.contains("iso store order") && lower.contains("downloaded:");
+    let has_single_user_notice =
+        (lower.contains("single user licence only") || lower.contains("single user license only"))
+            && lower.contains("networking prohibited");
+    let has_license_banner =
+        lower.contains("licensed to") && lower.contains("license #") && lower.contains("downloaded:");
+
+    has_store_download || has_single_user_notice || has_license_banner
 }
 
 fn estimate_dehyphenation_false_positive_rate(
@@ -1702,9 +1707,11 @@ fn estimate_dehyphenation_false_positive_rate(
     };
 
     let merges = snapshot.snapshot.counts.dehyphenation_merges;
-    let processed_pages = snapshot.snapshot.counts.text_layer_page_count
-        + snapshot.snapshot.counts.ocr_page_count
-        + snapshot.snapshot.counts.empty_page_count;
+    let mut processed_pages =
+        snapshot.snapshot.counts.text_layer_page_count + snapshot.snapshot.counts.ocr_page_count;
+    if processed_pages == 0 {
+        processed_pages = snapshot.snapshot.counts.empty_page_count;
+    }
     if processed_pages == 0 {
         return Some(0.0);
     }
