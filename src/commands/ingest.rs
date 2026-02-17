@@ -3,10 +3,10 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use regex::Regex;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use tracing::{info, warn};
 
 use crate::cli::IngestArgs;
@@ -1785,6 +1785,17 @@ fn extract_body_lines<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
         .collect()
 }
 
+fn extract_body_lines_preserve_blanks<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
+    let mut lines = text.lines().collect::<Vec<&str>>();
+    if let Some(first) = lines.first() {
+        if first.trim() == heading.trim() {
+            lines.remove(0);
+        }
+    }
+
+    lines
+}
+
 fn line_is_noise(line: &str) -> bool {
     let lower = line.to_lowercase();
     lower.contains("license")
@@ -1878,7 +1889,7 @@ fn parse_paragraphs(
     list_item_regex: &Regex,
     note_item_regex: &Regex,
 ) -> Vec<String> {
-    let body_lines = extract_body_lines(text, heading);
+    let body_lines = extract_body_lines_preserve_blanks(text, heading);
     let mut paragraphs = Vec::<String>::new();
     let mut current = String::new();
 
@@ -2859,5 +2870,40 @@ mod tests {
         assert_eq!(note_items[0].marker_norm, "NOTE 1");
         assert_eq!(note_items[1].marker_norm, "NOTE 2");
         assert!(note_items[0].text.contains("Development approaches"));
+    }
+
+    #[test]
+    fn parse_paragraphs_splits_on_blank_lines() {
+        let list_item_regex = Regex::new(
+            r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
+        )
+        .expect("list regex compiles");
+        let note_item_regex = Regex::new(r"^(?i)(?P<marker>NOTE(?:\s+\d+)?)(?:\s+(?P<body>.+))?$")
+            .expect("note regex compiles");
+
+        let text = "9.3 Heading\nThe software unit should satisfy the first property.\n\nThis second paragraph starts after a blank line.";
+        let paragraphs = parse_paragraphs(text, "9.3 Heading", &list_item_regex, &note_item_regex);
+
+        assert_eq!(paragraphs.len(), 2);
+        assert!(paragraphs[0].contains("first property"));
+        assert!(paragraphs[1].contains("second paragraph"));
+    }
+
+    #[test]
+    fn parse_paragraphs_splits_before_marker_transitions() {
+        let list_item_regex = Regex::new(
+            r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
+        )
+        .expect("list regex compiles");
+        let note_item_regex = Regex::new(r"^(?i)(?P<marker>NOTE(?:\s+\d+)?)(?:\s+(?P<body>.+))?$")
+            .expect("note regex compiles");
+
+        let text = "8.4.5 Heading\nThe following principles apply to software units.\nNOTE 1 This is informative guidance.\na) first normative bullet";
+        let paragraphs =
+            parse_paragraphs(text, "8.4.5 Heading", &list_item_regex, &note_item_regex);
+
+        assert_eq!(paragraphs.len(), 3);
+        assert_eq!(paragraphs[1], "NOTE 1 This is informative guidance.");
+        assert_eq!(paragraphs[2], "a) first normative bullet");
     }
 }
