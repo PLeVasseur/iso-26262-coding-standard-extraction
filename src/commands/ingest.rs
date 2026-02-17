@@ -441,6 +441,7 @@ struct ChunkInsertStats {
 #[derive(Debug, Default)]
 struct ExtractedPages {
     pages: Vec<String>,
+    page_printed_labels: Vec<Option<String>>,
     ocr_page_count: usize,
     text_layer_page_count: usize,
     ocr_fallback_page_count: usize,
@@ -460,6 +461,8 @@ struct PageExtractionProvenance {
     reason: String,
     text_char_count: usize,
     ocr_char_count: Option<usize>,
+    printed_page_label: Option<String>,
+    printed_page_status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -736,11 +739,12 @@ fn insert_chunks(
             "
             INSERT INTO chunks(
               chunk_id, doc_id, type, ref, ref_path, heading, chunk_seq,
-              page_pdf_start, page_pdf_end, text, table_md, table_csv, source_hash,
+              page_pdf_start, page_pdf_end, page_printed_start, page_printed_end,
+              text, table_md, table_csv, source_hash,
               origin_node_id, leaf_node_type, ancestor_path,
               anchor_type, anchor_label_raw, anchor_label_norm, anchor_order, citation_anchor_id
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
             ON CONFLICT(chunk_id) DO UPDATE SET
               doc_id=excluded.doc_id,
               type=excluded.type,
@@ -750,6 +754,8 @@ fn insert_chunks(
               chunk_seq=excluded.chunk_seq,
               page_pdf_start=excluded.page_pdf_start,
               page_pdf_end=excluded.page_pdf_end,
+              page_printed_start=excluded.page_printed_start,
+              page_printed_end=excluded.page_printed_end,
               text=excluded.text,
               table_md=excluded.table_md,
               table_csv=excluded.table_csv,
@@ -840,6 +846,7 @@ fn insert_chunks(
                     continue;
                 }
             };
+            let page_printed_labels = page_extraction.page_printed_labels.clone();
             let pages = page_extraction.pages;
             stats.ocr_page_count += page_extraction.ocr_page_count;
             stats.text_layer_page_count += page_extraction.text_layer_page_count;
@@ -1091,6 +1098,10 @@ fn insert_chunks(
                     Some(&chunk.reference),
                     chunk_anchor_order,
                 ));
+                let chunk_page_printed_start =
+                    printed_page_label_for(&page_printed_labels, chunk.page_start);
+                let chunk_page_printed_end =
+                    printed_page_label_for(&page_printed_labels, chunk.page_end);
 
                 chunk_statement.execute(params![
                     chunk_id,
@@ -1102,6 +1113,8 @@ fn insert_chunks(
                     structured_seq,
                     chunk.page_start,
                     chunk.page_end,
+                    &chunk_page_printed_start,
+                    &chunk_page_printed_end,
                     &chunk.text,
                     &table_md,
                     &table_csv,
@@ -1248,6 +1261,8 @@ fn insert_chunks(
                     let chunk_id = format!("{}:page:{:04}", doc_id, page_number);
                     let page_ref = format!("PDF page {}", page_number);
                     let heading = format!("Page {}", page_number);
+                    let page_printed_label =
+                        printed_page_label_for(&page_printed_labels, page_number);
                     let page_node_id = format!("{}:node:page:{:04}", doc_id, page_number);
                     let page_ancestor_path = build_ancestor_path(
                         Some(&document_node_id),
@@ -1291,6 +1306,8 @@ fn insert_chunks(
                         page_number,
                         page_number,
                         page_number,
+                        &page_printed_label,
+                        &page_printed_label,
                         text,
                         Option::<String>::None,
                         Option::<String>::None,
@@ -2725,6 +2742,7 @@ fn extract_pages_with_backend(
 ) -> Result<ExtractedPages> {
     let pages = extract_pages_with_pdftotext(pdf_path, max_pages_per_doc)?;
     let mut extraction = ExtractedPages {
+        page_printed_labels: vec![None; pages.len()],
         text_layer_page_count: pages.len(),
         empty_page_count: pages
             .iter()
@@ -2746,6 +2764,8 @@ fn extract_pages_with_backend(
                     },
                     text_char_count: chars,
                     ocr_char_count: None,
+                    printed_page_label: None,
+                    printed_page_status: "unknown".to_string(),
                 }
             })
             .collect(),
@@ -2755,6 +2775,7 @@ fn extract_pages_with_backend(
 
     let candidate_pages = collect_ocr_candidates(&extraction.pages, ocr_mode, ocr_min_text_chars);
     if candidate_pages.is_empty() {
+        refresh_printed_page_labels(&mut extraction);
         apply_page_normalization(&mut extraction);
         return Ok(extraction);
     }
@@ -2776,6 +2797,7 @@ fn extract_pages_with_backend(
             }
         }
         extraction.warnings.push(message);
+        refresh_printed_page_labels(&mut extraction);
         apply_page_normalization(&mut extraction);
         return Ok(extraction);
     }
@@ -2859,6 +2881,7 @@ fn extract_pages_with_backend(
         }
     }
 
+    refresh_printed_page_labels(&mut extraction);
     apply_page_normalization(&mut extraction);
     Ok(extraction)
 }
@@ -2906,6 +2929,76 @@ fn apply_page_normalization(extraction: &mut ExtractedPages) {
         .iter()
         .filter(|page| non_whitespace_char_count(page) == 0)
         .count();
+}
+
+fn refresh_printed_page_labels(extraction: &mut ExtractedPages) {
+    extraction.page_printed_labels = extraction
+        .pages
+        .iter()
+        .map(|page| detect_printed_page_label(page))
+        .collect();
+
+    for (index, label) in extraction.page_printed_labels.iter().enumerate() {
+        if let Some(entry) = extraction.page_provenance.get_mut(index) {
+            entry.printed_page_label = label.clone();
+            if label.is_some() {
+                entry.printed_page_status = "detected".to_string();
+            } else {
+                entry.printed_page_status = "missing".to_string();
+            }
+        }
+    }
+}
+
+fn detect_printed_page_label(page_text: &str) -> Option<String> {
+    let lines = page_text.lines().collect::<Vec<&str>>();
+
+    let page_regex = Regex::new(r"(?i)^page\s+([0-9ivxlcdm]+)$").ok()?;
+    let number_regex = Regex::new(r"^([0-9]{1,4})$").ok()?;
+    let roman_regex = Regex::new(r"(?i)^([ivxlcdm]{1,8})$").ok()?;
+
+    for line in lines.iter().rev().take(5).chain(lines.iter().take(2)) {
+        let normalized = line
+            .chars()
+            .filter(|character| {
+                character.is_ascii_alphanumeric() || character.is_ascii_whitespace()
+            })
+            .collect::<String>();
+        let normalized = normalized.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+
+        if let Some(captures) = page_regex.captures(normalized) {
+            if let Some(value) = captures.get(1) {
+                return Some(value.as_str().to_ascii_lowercase());
+            }
+        }
+
+        if let Some(captures) = number_regex.captures(normalized) {
+            if let Some(value) = captures.get(1) {
+                return Some(value.as_str().to_string());
+            }
+        }
+
+        if let Some(captures) = roman_regex.captures(normalized) {
+            if let Some(value) = captures.get(1) {
+                return Some(value.as_str().to_ascii_lowercase());
+            }
+        }
+    }
+
+    None
+}
+
+fn printed_page_label_for(labels: &[Option<String>], page_pdf: i64) -> Option<String> {
+    if page_pdf <= 0 {
+        return None;
+    }
+
+    labels
+        .get((page_pdf - 1) as usize)
+        .and_then(|label| label.clone())
 }
 
 fn detect_repeated_edge_lines(pages: &[String], header: bool) -> HashSet<String> {
@@ -3512,5 +3605,20 @@ mod tests {
 
         assert_eq!(extraction.dehyphenation_merges, 1);
         assert_eq!(extraction.pages[0], "software unit");
+    }
+
+    #[test]
+    fn detect_printed_page_label_supports_numeric_and_roman_labels() {
+        let numeric_page = "Some line\nPage 12\n";
+        let roman_page = "Some line\nii\n";
+
+        assert_eq!(
+            detect_printed_page_label(numeric_page),
+            Some("12".to_string())
+        );
+        assert_eq!(
+            detect_printed_page_label(roman_page),
+            Some("ii".to_string())
+        );
     }
 }
