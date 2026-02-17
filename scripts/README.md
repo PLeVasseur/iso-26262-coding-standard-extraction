@@ -48,11 +48,38 @@ Resume behavior is strict:
 scripts/refresh_quality_artifacts.sh
 ```
 
+### Quick parser iteration mode (Part 6)
+
+Default behavior is optimized for Part 6 parser iteration:
+
+```bash
+PART=6 MAX_PAGES=60 scripts/refresh_quality_artifacts.sh
+```
+
+Quick mode tolerates `Q-022` freshness failures (expected when only Part 6 is refreshed) but still requires all other checks to pass.
+
+### Full-target freshness mode (WP1)
+
+Use full-target mode to refresh all target parts in one ingest cycle (Parts 2, 6, 8, 9):
+
+```bash
+FULL_TARGET_SET=1 TARGET_PARTS="2 6 8 9" scripts/refresh_quality_artifacts.sh
+```
+
+Optional full-mode page cap:
+
+```bash
+FULL_TARGET_SET=1 TARGET_PARTS="2 6 8 9" FULL_MAX_PAGES=120 scripts/refresh_quality_artifacts.sh
+```
+
 Optional environment overrides:
 
 - `CACHE_ROOT` (default `.cache/iso26262`)
 - `PART` (default `6`)
 - `MAX_PAGES` (default `60`)
+- `FULL_TARGET_SET=1` to enable full-target ingest mode
+- `TARGET_PARTS` (default `2 6 8 9`) used when `FULL_TARGET_SET=1`
+- `FULL_MAX_PAGES` (default `0`) optional page cap for full-target mode (`0` means no cap)
 - `PHASE_ID` (default `phase-8`)
 - `PHASE_NAME` (default `Phase 8 - Deterministic runbook and crash recovery`)
 - `BASE_BRANCH` (default `main`)
