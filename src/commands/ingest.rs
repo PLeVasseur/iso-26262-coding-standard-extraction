@@ -3,10 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use regex::Regex;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use tracing::{info, warn};
 
@@ -144,6 +144,7 @@ pub fn run(args: IngestArgs) -> Result<()> {
             paragraph_nodes_inserted: chunk_stats.paragraph_nodes_inserted,
             requirement_atom_nodes_inserted: chunk_stats.requirement_atom_nodes_inserted,
             table_raw_fallback_count: chunk_stats.table_raw_fallback_count,
+            list_parse_candidate_count: chunk_stats.list_parse_candidate_count,
             list_parse_fallback_count: chunk_stats.list_parse_fallback_count,
             table_sparse_rows_count: chunk_stats.table_sparse_rows_count,
             table_overloaded_rows_count: chunk_stats.table_overloaded_rows_count,
@@ -246,6 +247,15 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
           anchor_label_norm TEXT,
           anchor_order INTEGER,
           citation_anchor_id TEXT,
+          list_depth INTEGER,
+          list_marker_style TEXT,
+          item_index INTEGER,
+          table_node_id TEXT,
+          row_idx INTEGER,
+          col_idx INTEGER,
+          is_header INTEGER,
+          row_span INTEGER,
+          col_span INTEGER,
           FOREIGN KEY(doc_id) REFERENCES docs(doc_id),
           FOREIGN KEY(parent_node_id) REFERENCES nodes(node_id)
         );
@@ -288,6 +298,12 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
     ensure_column_exists(connection, "nodes", "list_depth INTEGER")?;
     ensure_column_exists(connection, "nodes", "list_marker_style TEXT")?;
     ensure_column_exists(connection, "nodes", "item_index INTEGER")?;
+    ensure_column_exists(connection, "nodes", "table_node_id TEXT")?;
+    ensure_column_exists(connection, "nodes", "row_idx INTEGER")?;
+    ensure_column_exists(connection, "nodes", "col_idx INTEGER")?;
+    ensure_column_exists(connection, "nodes", "is_header INTEGER")?;
+    ensure_column_exists(connection, "nodes", "row_span INTEGER")?;
+    ensure_column_exists(connection, "nodes", "col_span INTEGER")?;
     ensure_column_exists(connection, "chunks", "origin_node_id TEXT")?;
     ensure_column_exists(connection, "chunks", "leaf_node_type TEXT")?;
     ensure_column_exists(connection, "chunks", "ancestor_path TEXT")?;
@@ -313,6 +329,7 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_nodes_doc_type ON nodes(doc_id, node_type);
         CREATE INDEX IF NOT EXISTS idx_nodes_doc_parent_order ON nodes(doc_id, parent_node_id, order_index);
         CREATE INDEX IF NOT EXISTS idx_nodes_doc_citation_anchor ON nodes(doc_id, citation_anchor_id);
+        CREATE INDEX IF NOT EXISTS idx_nodes_table_semantics ON nodes(table_node_id, row_idx, col_idx);
         CREATE INDEX IF NOT EXISTS idx_chunks_origin_node ON chunks(origin_node_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_doc_citation_anchor ON chunks(doc_id, citation_anchor_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_doc_ref_anchor_label ON chunks(doc_id, ref, anchor_label_norm);
@@ -430,6 +447,7 @@ struct ChunkInsertStats {
     paragraph_nodes_inserted: usize,
     requirement_atom_nodes_inserted: usize,
     table_raw_fallback_count: usize,
+    list_parse_candidate_count: usize,
     list_parse_fallback_count: usize,
     table_sparse_rows_count: usize,
     table_overloaded_rows_count: usize,
@@ -861,9 +879,10 @@ fn insert_chunks(
               node_id, parent_node_id, doc_id, node_type, ref, ref_path, heading,
               order_index, page_pdf_start, page_pdf_end, text, source_hash, ancestor_path,
               anchor_type, anchor_label_raw, anchor_label_norm, anchor_order, citation_anchor_id,
-              list_depth, list_marker_style, item_index
+              list_depth, list_marker_style, item_index,
+              table_node_id, row_idx, col_idx, is_header, row_span, col_span
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
             ON CONFLICT(node_id) DO UPDATE SET
               parent_node_id=excluded.parent_node_id,
               doc_id=excluded.doc_id,
@@ -884,7 +903,13 @@ fn insert_chunks(
               citation_anchor_id=excluded.citation_anchor_id,
               list_depth=excluded.list_depth,
               list_marker_style=excluded.list_marker_style,
-              item_index=excluded.item_index
+              item_index=excluded.item_index,
+              table_node_id=excluded.table_node_id,
+              row_idx=excluded.row_idx,
+              col_idx=excluded.col_idx,
+              is_header=excluded.is_header,
+              row_span=excluded.row_span,
+              col_span=excluded.col_span
             ",
         )?;
 
@@ -987,6 +1012,12 @@ fn insert_chunks(
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
             )?;
 
             stats.nodes_total += 1;
@@ -1044,6 +1075,12 @@ fn insert_chunks(
                     Some(&section.reference),
                     section_anchor_order,
                     Some(&section_anchor_id),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -1140,6 +1177,12 @@ fn insert_chunks(
                     node_anchor_type.map(|_| chunk.reference.as_str()),
                     node_anchor_order,
                     node_anchor_id.as_deref(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -1304,12 +1347,15 @@ fn insert_chunks(
                         )?;
                     }
 
-                    let (list_items, list_fallback) = parse_list_items(
+                    let (list_items, list_fallback, had_list_candidates) = parse_list_items(
                         &chunk.text,
                         &chunk.heading,
                         &list_item_regex,
                         &note_item_regex,
                     );
+                    if had_list_candidates {
+                        stats.list_parse_candidate_count += 1;
+                    }
                     if !list_items.is_empty() {
                         insert_list_nodes(
                             &mut node_statement,
@@ -1389,6 +1435,12 @@ fn insert_chunks(
                         Some(text),
                         &pdf.sha256,
                         &page_ancestor_path,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
                         None,
                         None,
                         None,
@@ -1544,6 +1596,12 @@ fn insert_node(
     list_depth: Option<i64>,
     list_marker_style: Option<&str>,
     item_index: Option<i64>,
+    table_node_id: Option<&str>,
+    row_idx: Option<i64>,
+    col_idx: Option<i64>,
+    is_header: Option<i64>,
+    row_span: Option<i64>,
+    col_span: Option<i64>,
 ) -> Result<()> {
     statement.execute(params![
         node_id,
@@ -1566,7 +1624,13 @@ fn insert_node(
         citation_anchor_id,
         list_depth,
         list_marker_style,
-        item_index
+        item_index,
+        table_node_id,
+        row_idx,
+        col_idx,
+        is_header,
+        row_span,
+        col_span
     ])?;
     Ok(())
 }
@@ -1585,6 +1649,8 @@ fn insert_table_child_nodes(
     node_order_index: &mut i64,
     stats: &mut ChunkInsertStats,
 ) -> Result<()> {
+    let header_row_count = infer_table_header_rows(&parsed_table.rows);
+
     for (row_idx, row_cells) in parsed_table.rows.iter().enumerate() {
         let row_node_id = format!("{}:row:{:03}", table_node_id, row_idx + 1);
         let row_ref = format!("{} row {}", table_reference, row_idx + 1);
@@ -1593,6 +1659,7 @@ fn insert_table_child_nodes(
         let row_path = format!("{} > table_row:{}", table_ancestor_path, row_idx + 1);
         let row_order = (row_idx + 1) as i64;
         let row_label = (row_idx + 1).to_string();
+        let row_is_header = if row_idx < header_row_count { 1 } else { 0 };
         let row_anchor_id = build_citation_anchor_id(
             doc_id,
             table_reference,
@@ -1623,6 +1690,12 @@ fn insert_table_child_nodes(
             Some(&row_anchor_id),
             None,
             None,
+            None,
+            Some(table_node_id),
+            Some((row_idx + 1) as i64),
+            None,
+            Some(row_is_header),
+            Some(1),
             None,
         )?;
 
@@ -1673,6 +1746,12 @@ fn insert_table_child_nodes(
                 None,
                 None,
                 None,
+                Some(table_node_id),
+                Some((row_idx + 1) as i64),
+                Some((col_idx + 1) as i64),
+                Some(row_is_header),
+                Some(1),
+                Some(1),
             )?;
 
             *node_order_index += 1;
@@ -1699,6 +1778,8 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
         }
     }
 
+    normalize_table_rows_for_alignment(&mut rows);
+
     let mut structured = rows.len() >= 2 && rows.iter().any(|cells| cells.len() > 1);
     let reconstructed = reconstruct_table_rows_from_markers(&body_lines);
     if !reconstructed.is_empty() {
@@ -1712,12 +1793,14 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
             &reconstructed_quality,
         ) {
             rows = reconstructed;
+            normalize_table_rows_for_alignment(&mut rows);
             structured = rows.len() >= 2 && rows.iter().any(|cells| cells.len() > 1);
         } else if !structured
             && reconstructed.len() >= 2
             && reconstructed.iter().any(|cells| cells.len() > 1)
         {
             rows = reconstructed;
+            normalize_table_rows_for_alignment(&mut rows);
             structured = true;
         }
     }
@@ -1741,6 +1824,97 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
         used_fallback: !structured,
         quality,
     }
+}
+
+fn normalize_table_rows_for_alignment(rows: &mut Vec<Vec<String>>) {
+    merge_single_cell_continuations(rows);
+    split_marker_rows_with_trailing_ratings(rows);
+}
+
+fn merge_single_cell_continuations(rows: &mut Vec<Vec<String>>) {
+    let mut merged = Vec::<Vec<String>>::new();
+
+    for row in rows.drain(..) {
+        if row.len() == 1 {
+            let content = row[0].trim();
+            if !content.is_empty()
+                && parse_table_marker_token(content).is_none()
+                && let Some(previous) = merged.last_mut()
+                && previous
+                    .first()
+                    .map(|value| parse_table_marker_token(value).is_some())
+                    .unwrap_or(false)
+            {
+                if previous.len() < 2 {
+                    previous.push(content.to_string());
+                } else if let Some(description) = previous.get_mut(1) {
+                    if !description.is_empty() {
+                        description.push(' ');
+                    }
+                    description.push_str(content);
+                }
+                continue;
+            }
+        }
+
+        merged.push(row);
+    }
+
+    *rows = merged;
+}
+
+fn split_marker_rows_with_trailing_ratings(rows: &mut [Vec<String>]) {
+    for row in rows {
+        if row.len() != 2 {
+            continue;
+        }
+
+        let is_marker_row = row
+            .first()
+            .map(|value| parse_table_marker_token(value).is_some())
+            .unwrap_or(false);
+        if !is_marker_row {
+            continue;
+        }
+
+        let description = row.get(1).cloned().unwrap_or_default();
+        let tokens = description
+            .split_whitespace()
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<&str>>();
+        if tokens.len() < 3 {
+            continue;
+        }
+
+        let mut trailing_ratings = Vec::<String>::new();
+        for token in tokens.iter().rev() {
+            let normalized = token.trim_matches(['(', ')', '.', ':', ';', ',']);
+            if is_table_rating_token(normalized) {
+                trailing_ratings.push(normalized.to_string());
+            } else {
+                break;
+            }
+        }
+
+        if trailing_ratings.len() < 2 {
+            continue;
+        }
+
+        trailing_ratings.reverse();
+        let split_at = tokens.len().saturating_sub(trailing_ratings.len());
+        let merged_description = tokens[..split_at].join(" ");
+        if merged_description.is_empty() {
+            continue;
+        }
+
+        row[1] = merged_description;
+        row.extend(trailing_ratings);
+    }
+}
+
+fn is_table_rating_token(token: &str) -> bool {
+    matches!(token, "+" | "++" | "-" | "--" | "+/-" | "+/−" | "−/+" | "o")
 }
 
 fn analyze_table_rows(rows: &[Vec<String>]) -> TableQualityCounters {
@@ -1776,6 +1950,26 @@ fn analyze_table_rows(rows: &[Vec<String>]) -> TableQualityCounters {
 fn parse_table_marker_token(value: &str) -> Option<(i64, Option<char>)> {
     let marker = normalize_marker_label(value);
     parse_numeric_alpha_marker(&marker)
+}
+
+fn infer_table_header_rows(rows: &[Vec<String>]) -> usize {
+    let Some(first_row) = rows.first() else {
+        return 0;
+    };
+
+    let first_cell = first_row.first().map(|value| value.as_str()).unwrap_or_default();
+    let first_row_has_marker = parse_table_marker_token(first_cell).is_some();
+    if first_row_has_marker {
+        return 0;
+    }
+
+    let non_empty_cells = first_row
+        .iter()
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty())
+        .count();
+
+    if non_empty_cells >= 2 { 1 } else { 0 }
 }
 
 fn count_row_marker_tokens(row: &[String]) -> usize {
@@ -2221,6 +2415,12 @@ fn insert_paragraph_nodes(
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )?;
 
         *node_order_index += 1;
@@ -2236,7 +2436,7 @@ fn parse_list_items(
     heading: &str,
     list_item_regex: &Regex,
     note_item_regex: &Regex,
-) -> (Vec<ListItemDraft>, bool) {
+) -> (Vec<ListItemDraft>, bool, bool) {
     let body_lines = extract_body_lines_preserve_blanks(text, heading);
     let mut items = Vec::<ListItemDraft>::new();
     let mut list_like_lines = 0usize;
@@ -2319,7 +2519,7 @@ fn parse_list_items(
     reorder_list_items_for_marker_sequence(&mut items);
 
     let used_fallback = list_like_lines > 0 && items.is_empty();
-    (items, used_fallback)
+    (items, used_fallback, list_like_lines > 0)
 }
 
 fn parse_note_items(
@@ -2551,6 +2751,12 @@ fn insert_list_nodes(
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
     )?;
 
     *node_order_index += 1;
@@ -2626,6 +2832,12 @@ fn insert_list_nodes(
             Some(effective_depth),
             Some(item.marker_style.as_str()),
             Some(item_index),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )?;
 
         last_item_node_id_by_depth.insert(effective_depth, list_item_node_id.clone());
@@ -2680,6 +2892,12 @@ fn insert_note_nodes(
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
     )?;
 
     *node_order_index += 1;
@@ -2720,6 +2938,12 @@ fn insert_note_nodes(
             Some(&item.marker_norm),
             Some(marker_order),
             Some(&marker_anchor_id),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -2785,6 +3009,12 @@ fn insert_requirement_atom_nodes(
             Some(atom),
             source_hash,
             &atom_path,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -3691,6 +3921,47 @@ mod tests {
     }
 
     #[test]
+    fn merge_single_cell_continuations_appends_to_previous_marker_row() {
+        let mut rows = vec![
+            vec!["1a".to_string(), "Requirement text".to_string()],
+            vec!["continued tail".to_string()],
+            vec!["1b".to_string(), "Second requirement".to_string()],
+        ];
+
+        merge_single_cell_continuations(&mut rows);
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0][1].contains("Requirement text"));
+        assert!(rows[0][1].contains("continued tail"));
+    }
+
+    #[test]
+    fn split_marker_rows_with_trailing_ratings_extracts_rating_columns() {
+        let mut rows = vec![vec![
+            "1a".to_string(),
+            "Description ++ + o -".to_string(),
+        ]];
+
+        split_marker_rows_with_trailing_ratings(&mut rows);
+
+        assert_eq!(rows[0][1], "Description");
+        assert_eq!(rows[0][2], "++");
+        assert_eq!(rows[0][3], "+");
+        assert_eq!(rows[0][4], "o");
+        assert_eq!(rows[0][5], "-");
+    }
+
+    #[test]
+    fn infer_table_header_rows_detects_first_non_marker_row() {
+        let rows = vec![
+            vec!["Requirement".to_string(), "ASIL A".to_string()],
+            vec!["1a".to_string(), "description".to_string()],
+        ];
+
+        assert_eq!(infer_table_header_rows(&rows), 1);
+    }
+
+    #[test]
     fn parse_list_items_excludes_note_markers() {
         let list_item_regex = Regex::new(
             r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
@@ -3700,10 +3971,11 @@ mod tests {
             .expect("note regex compiles");
 
         let text = "9.4.2 Heading\nNOTE 1 software safety requirements include implementation constraints\na) retain traceability\nb) verify assumptions";
-        let (list_items, fallback) =
+        let (list_items, fallback, had_candidates) =
             parse_list_items(text, "9.4.2 Heading", &list_item_regex, &note_item_regex);
 
         assert!(!fallback);
+        assert!(had_candidates);
         assert_eq!(list_items.len(), 2);
         assert_eq!(list_items[0].marker_norm, "a");
         assert_eq!(list_items[1].marker_norm, "b");
@@ -3720,10 +3992,11 @@ mod tests {
 
         let text =
             "6.4 Heading\n1) top-level item\n  a) nested alpha item\n    - nested bullet item";
-        let (list_items, fallback) =
+        let (list_items, fallback, had_candidates) =
             parse_list_items(text, "6.4 Heading", &list_item_regex, &note_item_regex);
 
         assert!(!fallback);
+        assert!(had_candidates);
         assert_eq!(list_items.len(), 3);
         assert_eq!(list_items[0].marker_style, "numeric");
         assert_eq!(list_items[0].depth, 1);
@@ -3835,18 +4108,14 @@ mod tests {
 
         assert_eq!(extraction.header_lines_removed, 3);
         assert_eq!(extraction.footer_lines_removed, 3);
-        assert!(
-            extraction
-                .pages
-                .iter()
-                .all(|page| !page.contains("ISO 26262 Part 6"))
-        );
-        assert!(
-            extraction
-                .pages
-                .iter()
-                .all(|page| !page.contains("Licensed copy"))
-        );
+        assert!(extraction
+            .pages
+            .iter()
+            .all(|page| !page.contains("ISO 26262 Part 6")));
+        assert!(extraction
+            .pages
+            .iter()
+            .all(|page| !page.contains("Licensed copy")));
     }
 
     #[test]
@@ -3886,11 +4155,9 @@ mod tests {
 
         let segments = split_words_with_overlap(&text, 900, 75);
         assert!(segments.len() >= 2);
-        assert!(
-            segments
-                .iter()
-                .all(|segment| segment.split_whitespace().count() <= 900)
-        );
+        assert!(segments
+            .iter()
+            .all(|segment| segment.split_whitespace().count() <= 900));
     }
 
     #[test]
@@ -3912,15 +4179,11 @@ mod tests {
         let expanded = split_long_structured_chunks(vec![input]);
         assert!(expanded.len() >= 2);
         assert!(expanded.iter().all(|chunk| chunk.reference == "5.2"));
-        assert!(
-            expanded
-                .iter()
-                .all(|chunk| chunk.heading == "5.2 Software safety")
-        );
-        assert!(
-            expanded
-                .iter()
-                .all(|chunk| chunk.page_start == 10 && chunk.page_end == 12)
-        );
+        assert!(expanded
+            .iter()
+            .all(|chunk| chunk.heading == "5.2 Software safety"));
+        assert!(expanded
+            .iter()
+            .all(|chunk| chunk.page_start == 10 && chunk.page_end == 12));
     }
 }

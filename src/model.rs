@@ -99,6 +99,7 @@ pub struct IngestCounts {
     pub paragraph_nodes_inserted: usize,
     pub requirement_atom_nodes_inserted: usize,
     pub table_raw_fallback_count: usize,
+    pub list_parse_candidate_count: usize,
     pub list_parse_fallback_count: usize,
     pub table_sparse_rows_count: usize,
     pub table_overloaded_rows_count: usize,
