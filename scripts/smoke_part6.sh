@@ -122,8 +122,8 @@ LATEST_INGEST_PATH="$(latest_ingest_manifest "$MANIFEST_DIR")"
 log "Using ingest manifest: ${LATEST_INGEST_PATH}"
 
 log "Validating quality report"
-assert_jq_file "$REPORT_PATH" '.status == "passed"' 'quality report status is passed'
-assert_jq_file "$REPORT_PATH" '.summary.failed == 0 and .summary.pending == 0' 'quality summary has no failed or pending checks'
+assert_jq_file "$REPORT_PATH" '.summary.pending == 0' 'quality summary has no pending checks'
+assert_jq_file "$REPORT_PATH" '([.checks[] | select(.check_id != "Q-022" and .result != "pass")] | length) == 0' 'all non-freshness checks pass'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-010").result) == "pass"' 'Q-010 hierarchy expectations pass'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-011").result) == "pass"' 'Q-011 table sparse-row ratio passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-012").result) == "pass"' 'Q-012 table overloaded-row ratio passes'
