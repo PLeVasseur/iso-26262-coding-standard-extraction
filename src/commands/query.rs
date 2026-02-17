@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags};
+use anyhow::{Context, Result, bail};
+use rusqlite::{Connection, OpenFlags, params};
 use serde::Serialize;
 use tracing::info;
 
@@ -59,6 +59,7 @@ struct QueryResult {
     year: u32,
     chunk_type: String,
     reference: String,
+    parent_ref: Option<String>,
     heading: String,
     page_pdf_start: Option<i64>,
     page_pdf_end: Option<i64>,
@@ -547,6 +548,7 @@ fn to_results(
             part: candidate.part,
             year: candidate.year,
             chunk_type: candidate.chunk_type,
+            parent_ref: resolve_parent_ref(connection, candidate.origin_node_id.as_deref())?,
             reference: candidate.reference,
             heading: candidate.heading,
             page_pdf_start: candidate.page_pdf_start,
@@ -629,6 +631,9 @@ fn write_text_response(query_text: &str, results: &[QueryResult]) -> Result<()> 
         }
         if let Some(leaf_node_type) = &result.leaf_node_type {
             writeln!(output, "\tleaf_node_type: {leaf_node_type}")?;
+        }
+        if let Some(parent_ref) = &result.parent_ref {
+            writeln!(output, "\tparent_ref: {parent_ref}")?;
         }
         if let Some(anchor_type) = &result.anchor_type {
             writeln!(output, "\tanchor_type: {anchor_type}")?;
@@ -788,6 +793,10 @@ fn marker_base_reference(reference: &str) -> String {
         return base.to_string();
     }
 
+    if let Some((base, _)) = reference.split_once(" note ") {
+        return base.to_string();
+    }
+
     if let Some((base, _)) = reference.split_once(" para ") {
         return base.to_string();
     }
@@ -797,6 +806,47 @@ fn marker_base_reference(reference: &str) -> String {
     }
 
     reference.to_string()
+}
+
+fn resolve_parent_ref(
+    connection: &Connection,
+    origin_node_id: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(origin_node_id) = origin_node_id else {
+        return Ok(None);
+    };
+
+    let parent_ref = connection
+        .query_row(
+            "
+            WITH RECURSIVE ancestors(node_id, parent_node_id, node_type, ref, depth) AS (
+              SELECT n.node_id, n.parent_node_id, n.node_type, n.ref, 0
+              FROM nodes n
+              WHERE n.node_id = ?1
+
+              UNION ALL
+
+              SELECT p.node_id, p.parent_node_id, p.node_type, p.ref, a.depth + 1
+              FROM nodes p
+              JOIN ancestors a ON p.node_id = a.parent_node_id
+              WHERE a.depth < 16
+            )
+            SELECT ref
+            FROM ancestors
+            WHERE depth > 0
+              AND ref IS NOT NULL
+              AND trim(ref) <> ''
+              AND node_type IN ('clause', 'subclause', 'annex', 'table')
+            ORDER BY depth ASC
+            LIMIT 1
+            ",
+            [origin_node_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten();
+
+    Ok(parent_ref)
 }
 
 fn condense_whitespace(input: &str) -> String {
