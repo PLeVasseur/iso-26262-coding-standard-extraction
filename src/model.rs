@@ -64,12 +64,19 @@ pub struct IngestPaths {
     pub manifest_dir: String,
     pub inventory_manifest_path: String,
     pub db_path: String,
+    pub page_provenance_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestCounts {
     pub pdf_count: usize,
     pub processed_pdf_count: usize,
+    pub text_layer_page_count: usize,
+    pub ocr_fallback_page_count: usize,
+    pub empty_page_count: usize,
+    pub header_lines_removed: usize,
+    pub footer_lines_removed: usize,
+    pub dehyphenation_merges: usize,
     pub docs_upserted: usize,
     pub docs_total: i64,
     pub nodes_total: i64,

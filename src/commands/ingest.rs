@@ -3,10 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use regex::Regex;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
+use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::cli::{IngestArgs, OcrMode};
@@ -37,6 +38,10 @@ pub fn run(args: IngestArgs) -> Result<()> {
             utc_compact_string(started_ts)
         ))
     });
+    let page_provenance_path = manifest_dir.join(format!(
+        "ingest_page_provenance_{}.json",
+        utc_compact_string(started_ts)
+    ));
     let db_path = args
         .db_path
         .clone()
@@ -79,6 +84,14 @@ pub fn run(args: IngestArgs) -> Result<()> {
     let chunks_total = count_rows(&connection, "SELECT COUNT(*) FROM chunks")?;
     let updated_at = now_utc_string();
 
+    let page_provenance_manifest = PageProvenanceManifest {
+        manifest_version: 1,
+        run_id: run_id.clone(),
+        generated_at: updated_at.clone(),
+        entries: chunk_stats.page_provenance.clone(),
+    };
+    write_json_pretty(&page_provenance_path, &page_provenance_manifest)?;
+
     let manifest = IngestRunManifest {
         manifest_version: 1,
         run_id: run_id.clone(),
@@ -97,11 +110,18 @@ pub fn run(args: IngestArgs) -> Result<()> {
             manifest_dir: manifest_dir.display().to_string(),
             inventory_manifest_path: inventory_manifest_path.display().to_string(),
             db_path: db_path.display().to_string(),
+            page_provenance_path: page_provenance_path.display().to_string(),
         },
         processed_parts: chunk_stats.processed_parts.clone(),
         counts: IngestCounts {
             pdf_count: inventory.pdf_count,
             processed_pdf_count: chunk_stats.processed_pdf_count,
+            text_layer_page_count: chunk_stats.text_layer_page_count,
+            ocr_fallback_page_count: chunk_stats.ocr_fallback_page_count,
+            empty_page_count: chunk_stats.empty_page_count,
+            header_lines_removed: chunk_stats.header_lines_removed,
+            footer_lines_removed: chunk_stats.footer_lines_removed,
+            dehyphenation_merges: chunk_stats.dehyphenation_merges,
             docs_upserted,
             docs_total,
             nodes_total: chunk_stats.nodes_total,
@@ -382,6 +402,12 @@ struct ChunkInsertStats {
     processed_pdf_count: usize,
     processed_parts: Vec<u32>,
     ocr_page_count: usize,
+    text_layer_page_count: usize,
+    ocr_fallback_page_count: usize,
+    empty_page_count: usize,
+    header_lines_removed: usize,
+    footer_lines_removed: usize,
+    dehyphenation_merges: usize,
     structured_chunks_inserted: usize,
     clause_chunks_inserted: usize,
     table_chunks_inserted: usize,
@@ -408,6 +434,7 @@ struct ChunkInsertStats {
     table_rows_with_descriptions_count: usize,
     table_marker_expected_count: usize,
     table_marker_observed_count: usize,
+    page_provenance: Vec<PageExtractionProvenance>,
     warnings: Vec<String>,
 }
 
@@ -415,7 +442,32 @@ struct ChunkInsertStats {
 struct ExtractedPages {
     pages: Vec<String>,
     ocr_page_count: usize,
+    text_layer_page_count: usize,
+    ocr_fallback_page_count: usize,
+    empty_page_count: usize,
+    header_lines_removed: usize,
+    footer_lines_removed: usize,
+    dehyphenation_merges: usize,
+    page_provenance: Vec<PageExtractionProvenance>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PageExtractionProvenance {
+    doc_id: String,
+    page_pdf: i64,
+    backend: String,
+    reason: String,
+    text_char_count: usize,
+    ocr_char_count: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct PageProvenanceManifest {
+    manifest_version: u32,
+    run_id: String,
+    generated_at: String,
+    entries: Vec<PageExtractionProvenance>,
 }
 
 #[derive(Debug, Clone)]
@@ -767,6 +819,7 @@ fn insert_chunks(
 
             let page_extraction = match extract_pages_with_backend(
                 &pdf_path,
+                &doc_id,
                 max_pages_per_doc,
                 ocr_mode,
                 ocr_lang,
@@ -789,6 +842,15 @@ fn insert_chunks(
             };
             let pages = page_extraction.pages;
             stats.ocr_page_count += page_extraction.ocr_page_count;
+            stats.text_layer_page_count += page_extraction.text_layer_page_count;
+            stats.ocr_fallback_page_count += page_extraction.ocr_fallback_page_count;
+            stats.empty_page_count += page_extraction.empty_page_count;
+            stats.header_lines_removed += page_extraction.header_lines_removed;
+            stats.footer_lines_removed += page_extraction.footer_lines_removed;
+            stats.dehyphenation_merges += page_extraction.dehyphenation_merges;
+            stats
+                .page_provenance
+                .extend(page_extraction.page_provenance);
             stats.warnings.extend(page_extraction.warnings);
 
             let section_headings = match extract_section_headings_with_pdftohtml(&pdf_path) {
@@ -2655,6 +2717,7 @@ fn normalize_outline_label(raw_label: &str) -> String {
 
 fn extract_pages_with_backend(
     pdf_path: &Path,
+    doc_id: &str,
     max_pages_per_doc: Option<usize>,
     ocr_mode: OcrMode,
     ocr_lang: &str,
@@ -2662,12 +2725,37 @@ fn extract_pages_with_backend(
 ) -> Result<ExtractedPages> {
     let pages = extract_pages_with_pdftotext(pdf_path, max_pages_per_doc)?;
     let mut extraction = ExtractedPages {
+        text_layer_page_count: pages.len(),
+        empty_page_count: pages
+            .iter()
+            .filter(|page| non_whitespace_char_count(page) == 0)
+            .count(),
+        page_provenance: pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| {
+                let chars = non_whitespace_char_count(page);
+                PageExtractionProvenance {
+                    doc_id: doc_id.to_string(),
+                    page_pdf: (index + 1) as i64,
+                    backend: "text_layer".to_string(),
+                    reason: if chars == 0 {
+                        "text_layer_empty".to_string()
+                    } else {
+                        "text_layer_default".to_string()
+                    },
+                    text_char_count: chars,
+                    ocr_char_count: None,
+                }
+            })
+            .collect(),
         pages,
         ..ExtractedPages::default()
     };
 
     let candidate_pages = collect_ocr_candidates(&extraction.pages, ocr_mode, ocr_min_text_chars);
     if candidate_pages.is_empty() {
+        apply_page_normalization(&mut extraction);
         return Ok(extraction);
     }
 
@@ -2681,7 +2769,14 @@ fn extract_pages_with_backend(
             bail!(message);
         }
 
+        for page_number in &candidate_pages {
+            let page_index = page_number.saturating_sub(1);
+            if let Some(entry) = extraction.page_provenance.get_mut(page_index) {
+                entry.reason = "ocr_unavailable_text_layer_fallback".to_string();
+            }
+        }
         extraction.warnings.push(message);
+        apply_page_normalization(&mut extraction);
         return Ok(extraction);
     }
 
@@ -2695,12 +2790,17 @@ fn extract_pages_with_backend(
 
         match extract_page_with_ocr(pdf_path, page_number, ocr_lang) {
             Ok(ocr_text) => {
-                if ocr_text.trim().is_empty() && matches!(ocr_mode, OcrMode::Auto) {
+                let ocr_char_count = non_whitespace_char_count(&ocr_text);
+                if ocr_char_count == 0 && matches!(ocr_mode, OcrMode::Auto) {
                     extraction.warnings.push(format!(
                         "OCR text was empty for {} page {} in auto mode",
                         pdf_path.display(),
                         page_number
                     ));
+                    if let Some(entry) = extraction.page_provenance.get_mut(page_index) {
+                        entry.reason = "ocr_empty_text_layer_fallback".to_string();
+                        entry.ocr_char_count = Some(0);
+                    }
                     continue;
                 }
 
@@ -2708,6 +2808,29 @@ fn extract_pages_with_backend(
                     *page = ocr_text;
                 }
                 extraction.ocr_page_count += 1;
+                extraction.text_layer_page_count =
+                    extraction.text_layer_page_count.saturating_sub(1);
+                if matches!(ocr_mode, OcrMode::Auto) {
+                    extraction.ocr_fallback_page_count += 1;
+                }
+
+                let previous_chars = non_whitespace_char_count(&current_text);
+                if previous_chars == 0 && ocr_char_count > 0 {
+                    extraction.empty_page_count = extraction.empty_page_count.saturating_sub(1);
+                } else if previous_chars > 0 && ocr_char_count == 0 {
+                    extraction.empty_page_count += 1;
+                }
+
+                if let Some(entry) = extraction.page_provenance.get_mut(page_index) {
+                    entry.backend = "ocr".to_string();
+                    entry.reason = if matches!(ocr_mode, OcrMode::Force) {
+                        "ocr_force_mode".to_string()
+                    } else {
+                        "ocr_auto_low_text".to_string()
+                    };
+                    entry.text_char_count = ocr_char_count;
+                    entry.ocr_char_count = Some(ocr_char_count);
+                }
             }
             Err(error) => {
                 if matches!(ocr_mode, OcrMode::Force) {
@@ -2729,11 +2852,155 @@ fn extract_pages_with_backend(
                 if let Some(page) = extraction.pages.get_mut(page_index) {
                     *page = current_text;
                 }
+                if let Some(entry) = extraction.page_provenance.get_mut(page_index) {
+                    entry.reason = "ocr_failed_text_layer_fallback".to_string();
+                }
             }
         }
     }
 
+    apply_page_normalization(&mut extraction);
     Ok(extraction)
+}
+
+fn apply_page_normalization(extraction: &mut ExtractedPages) {
+    let header_candidates = detect_repeated_edge_lines(&extraction.pages, true);
+    let footer_candidates = detect_repeated_edge_lines(&extraction.pages, false);
+
+    let mut header_removed = 0usize;
+    let mut footer_removed = 0usize;
+    let mut dehyphen_merges = 0usize;
+
+    for page in &mut extraction.pages {
+        let mut lines = page
+            .lines()
+            .map(|line| line.to_string())
+            .collect::<Vec<String>>();
+
+        if let Some(index) = first_nonempty_line_index(&lines) {
+            let candidate = normalize_edge_line(&lines[index]);
+            if !candidate.is_empty() && header_candidates.contains(&candidate) {
+                lines.remove(index);
+                header_removed += 1;
+            }
+        }
+
+        if let Some(index) = last_nonempty_line_index(&lines) {
+            let candidate = normalize_edge_line(&lines[index]);
+            if !candidate.is_empty() && footer_candidates.contains(&candidate) {
+                lines.remove(index);
+                footer_removed += 1;
+            }
+        }
+
+        let (normalized_lines, merges) = merge_hyphenated_lines(lines);
+        dehyphen_merges += merges;
+        *page = normalized_lines.join("\n");
+    }
+
+    extraction.header_lines_removed += header_removed;
+    extraction.footer_lines_removed += footer_removed;
+    extraction.dehyphenation_merges += dehyphen_merges;
+    extraction.empty_page_count = extraction
+        .pages
+        .iter()
+        .filter(|page| non_whitespace_char_count(page) == 0)
+        .count();
+}
+
+fn detect_repeated_edge_lines(pages: &[String], header: bool) -> HashSet<String> {
+    let mut counts = HashMap::<String, usize>::new();
+    for page in pages {
+        let lines = page.lines().map(str::trim).collect::<Vec<&str>>();
+        let candidate = if header {
+            lines.iter().copied().find(|line| !line.is_empty())
+        } else {
+            lines.iter().rev().copied().find(|line| !line.is_empty())
+        };
+
+        let Some(candidate) = candidate else {
+            continue;
+        };
+
+        let normalized = normalize_edge_line(candidate);
+        if normalized.is_empty() || normalized.len() > 120 {
+            continue;
+        }
+        *counts.entry(normalized).or_insert(0) += 1;
+    }
+
+    counts
+        .into_iter()
+        .filter_map(|(candidate, count)| if count >= 3 { Some(candidate) } else { None })
+        .collect()
+}
+
+fn normalize_edge_line(input: &str) -> String {
+    input
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn first_nonempty_line_index(lines: &[String]) -> Option<usize> {
+    lines.iter().position(|line| !line.trim().is_empty())
+}
+
+fn last_nonempty_line_index(lines: &[String]) -> Option<usize> {
+    lines.iter().rposition(|line| !line.trim().is_empty())
+}
+
+fn merge_hyphenated_lines(lines: Vec<String>) -> (Vec<String>, usize) {
+    let mut merged = Vec::<String>::new();
+    let mut merges = 0usize;
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        let current = lines[index].clone();
+        if index + 1 < lines.len() {
+            let next = lines[index + 1].clone();
+            if should_merge_hyphenated_pair(&current, &next) {
+                let joined = format!(
+                    "{}{}",
+                    current.trim_end().trim_end_matches('-'),
+                    next.trim_start()
+                );
+                merged.push(joined);
+                merges += 1;
+                index += 2;
+                continue;
+            }
+        }
+
+        merged.push(current);
+        index += 1;
+    }
+
+    (merged, merges)
+}
+
+fn should_merge_hyphenated_pair(current: &str, next: &str) -> bool {
+    let left = current.trim_end();
+    if !left.ends_with('-') {
+        return false;
+    }
+
+    let right = next.trim_start();
+    let starts_with_lowercase = right
+        .chars()
+        .next()
+        .map(|character| character.is_ascii_lowercase())
+        .unwrap_or(false);
+    if !starts_with_lowercase {
+        return false;
+    }
+
+    left.trim_end_matches('-')
+        .chars()
+        .last()
+        .map(|character| character.is_ascii_alphabetic())
+        .unwrap_or(false)
 }
 
 fn collect_ocr_candidates(
