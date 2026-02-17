@@ -18,6 +18,9 @@ const TABLE_DESCRIPTION_COVERAGE_MIN: f64 = 0.90;
 const MARKER_EXTRACTION_COVERAGE_MIN: f64 = 0.95;
 const MARKER_CITATION_ACCURACY_MIN: f64 = 0.90;
 const PARAGRAPH_CITATION_ACCURACY_MIN: f64 = 0.90;
+const ASIL_ALIGNMENT_MIN_RATING_COVERAGE: f64 = 0.60;
+const ASIL_ALIGNMENT_MAX_MALFORMED_RATIO: f64 = 0.10;
+const ASIL_ALIGNMENT_MAX_OUTLIER_RATIO: f64 = 0.15;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GoldSetManifest {
@@ -140,6 +143,33 @@ struct StructuralInvariantSummary {
     invalid_note_parent_count: i64,
     invalid_note_item_parent_count: i64,
     invalid_paragraph_parent_count: i64,
+}
+
+#[derive(Debug, Default)]
+struct AsilTableAlignmentSummary {
+    tables_expected: usize,
+    tables_found: usize,
+    marker_rows_total: usize,
+    marker_rows_with_ratings: usize,
+    marker_rows_malformed_description: usize,
+    marker_rows_outlier_cell_count: usize,
+}
+
+impl AsilTableAlignmentSummary {
+    fn rating_coverage(&self) -> Option<f64> {
+        ratio(self.marker_rows_with_ratings, self.marker_rows_total)
+    }
+
+    fn malformed_ratio(&self) -> Option<f64> {
+        ratio(
+            self.marker_rows_malformed_description,
+            self.marker_rows_total,
+        )
+    }
+
+    fn outlier_ratio(&self) -> Option<f64> {
+        ratio(self.marker_rows_outlier_cell_count, self.marker_rows_total)
+    }
 }
 
 impl StructuralInvariantSummary {
@@ -338,6 +368,15 @@ pub fn run(args: ValidateArgs) -> Result<()> {
     {
         recommendations.push(
             "Fix structural hierarchy violations (parent lineage, dangling pointers, and note/list/table parent contracts)."
+                .to_string(),
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.check_id == "Q-019" && check.result == "failed")
+    {
+        recommendations.push(
+            "Improve ASIL table row/cell alignment by distributing rating cells across marker rows and reducing malformed marker descriptions."
                 .to_string(),
         );
     }
@@ -1174,6 +1213,17 @@ fn build_quality_checks(
         .to_string(),
     });
 
+    let asil_alignment = collect_asil_table_alignment(
+        connection,
+        "ISO26262-6-2018",
+        &["Table 3", "Table 6", "Table 10"],
+    )?;
+    checks.push(QualityCheck {
+        check_id: "Q-019".to_string(),
+        name: "ASIL table row/cell alignment checks".to_string(),
+        result: evaluate_asil_table_alignment(&asil_alignment).to_string(),
+    });
+
     Ok(checks)
 }
 
@@ -1294,6 +1344,188 @@ fn collect_structural_invariants(connection: &Connection) -> Result<StructuralIn
             ",
         )?,
     })
+}
+
+fn collect_asil_table_alignment(
+    connection: &Connection,
+    doc_id: &str,
+    table_refs: &[&str],
+) -> Result<AsilTableAlignmentSummary> {
+    let mut summary = AsilTableAlignmentSummary {
+        tables_expected: table_refs.len(),
+        ..AsilTableAlignmentSummary::default()
+    };
+
+    for table_ref in table_refs {
+        let table_node_id = connection
+            .query_row(
+                "
+                SELECT node_id
+                FROM nodes
+                WHERE doc_id = ?1
+                  AND node_type = 'table'
+                  AND lower(ref) = lower(?2)
+                LIMIT 1
+                ",
+                params![doc_id, table_ref],
+                |row| row.get::<_, String>(0),
+            )
+            .ok();
+
+        let Some(table_node_id) = table_node_id else {
+            continue;
+        };
+
+        summary.tables_found += 1;
+
+        let mut statement = connection.prepare(
+            "
+            SELECT
+              r.node_id,
+              c.order_index,
+              c.text
+            FROM nodes r
+            LEFT JOIN nodes c
+              ON c.parent_node_id = r.node_id
+             AND c.node_type = 'table_cell'
+            WHERE r.parent_node_id = ?1
+              AND r.node_type = 'table_row'
+            ORDER BY r.order_index ASC, c.order_index ASC
+            ",
+        )?;
+
+        let mut rows = statement.query([table_node_id])?;
+        let mut active_row_id: Option<String> = None;
+        let mut active_cells = Vec::<String>::new();
+
+        while let Some(row) = rows.next()? {
+            let row_id: String = row.get(0)?;
+            let cell_text: Option<String> = row.get(2)?;
+
+            if active_row_id.as_deref() != Some(row_id.as_str()) {
+                if !active_cells.is_empty() {
+                    analyze_asil_marker_row(&active_cells, &mut summary);
+                    active_cells.clear();
+                }
+                active_row_id = Some(row_id);
+            }
+
+            if let Some(cell_text) = cell_text {
+                active_cells.push(cell_text.trim().to_string());
+            }
+        }
+
+        if !active_cells.is_empty() {
+            analyze_asil_marker_row(&active_cells, &mut summary);
+        }
+    }
+
+    Ok(summary)
+}
+
+fn analyze_asil_marker_row(cells: &[String], summary: &mut AsilTableAlignmentSummary) {
+    let Some(first_cell) = cells.first() else {
+        return;
+    };
+
+    if !looks_like_table_marker(first_cell) {
+        return;
+    }
+
+    summary.marker_rows_total += 1;
+
+    let description = cells.get(1).map(|value| value.as_str()).unwrap_or_default();
+    if is_malformed_marker_description(description) {
+        summary.marker_rows_malformed_description += 1;
+    }
+
+    if cells.len() > 10 {
+        summary.marker_rows_outlier_cell_count += 1;
+    }
+
+    if cells.iter().skip(2).any(|cell| contains_asil_rating(cell)) {
+        summary.marker_rows_with_ratings += 1;
+    }
+}
+
+fn evaluate_asil_table_alignment(summary: &AsilTableAlignmentSummary) -> &'static str {
+    if summary.tables_found < summary.tables_expected || summary.marker_rows_total == 0 {
+        return "pending";
+    }
+
+    let rating_ok = summary
+        .rating_coverage()
+        .map(|value| value >= ASIL_ALIGNMENT_MIN_RATING_COVERAGE)
+        .unwrap_or(false);
+    let malformed_ok = summary
+        .malformed_ratio()
+        .map(|value| value <= ASIL_ALIGNMENT_MAX_MALFORMED_RATIO)
+        .unwrap_or(false);
+    let outlier_ok = summary
+        .outlier_ratio()
+        .map(|value| value <= ASIL_ALIGNMENT_MAX_OUTLIER_RATIO)
+        .unwrap_or(false);
+
+    if rating_ok && malformed_ok && outlier_ok {
+        "pass"
+    } else {
+        "failed"
+    }
+}
+
+fn looks_like_table_marker(value: &str) -> bool {
+    let normalized = normalize_anchor_label(value);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    let mut chars = normalized.chars().peekable();
+    let mut has_digit = false;
+
+    while let Some(ch) = chars.peek().copied() {
+        if ch.is_ascii_digit() {
+            has_digit = true;
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    if !has_digit {
+        return false;
+    }
+
+    if let Some(ch) = chars.next() {
+        if !ch.is_ascii_lowercase() {
+            return false;
+        }
+    }
+
+    chars.next().is_none()
+}
+
+fn is_malformed_marker_description(description: &str) -> bool {
+    let trimmed = description.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let alphabetic_count = trimmed
+        .chars()
+        .filter(|value| value.is_ascii_alphabetic())
+        .count();
+    alphabetic_count <= 1 && trimmed.split_whitespace().count() <= 1
+}
+
+fn contains_asil_rating(cell_text: &str) -> bool {
+    cell_text
+        .split_whitespace()
+        .map(|token| token.trim_matches(['(', ')', '.', ':', ';', ',']))
+        .any(is_asil_rating_token)
+}
+
+fn is_asil_rating_token(token: &str) -> bool {
+    matches!(token, "+" | "++" | "-" | "--" | "+/-" | "+/−" | "−/+" | "o")
 }
 
 fn query_violation_count(connection: &Connection, sql: &str) -> Result<i64> {

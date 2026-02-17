@@ -133,6 +133,7 @@ assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-015").result)
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-016").result) == "pass"' 'Q-016 marker citation accuracy passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-017").result) == "pass"' 'Q-017 paragraph citation accuracy passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-018").result) == "pass"' 'Q-018 structural invariants pass'
+assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-019").result) == "pass"' 'Q-019 ASIL table alignment checks pass'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_sparse_row_ratio <= 0.20' 'table sparse-row ratio is within threshold'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_overloaded_row_ratio <= 0.10' 'table overloaded-row ratio is within threshold'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_marker_sequence_coverage >= 0.90' 'table marker-sequence coverage meets threshold'
