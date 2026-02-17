@@ -37,6 +37,12 @@ The script now enforces a deterministic runbook flow:
 - `R08` quality report verification
 - `R09` run-state finalization + decision-log append
 
+Script preflight dependencies:
+
+- `cargo`
+- `jq`
+- `git`
+
 Resume behavior is strict:
 
 - `run_state.status == running` resumes from `current_step`
@@ -57,6 +63,26 @@ PART=6 MAX_PAGES=60 scripts/refresh_quality_artifacts.sh
 ```
 
 Quick mode tolerates `Q-022` freshness failures (expected when only Part 6 is refreshed) but still requires all other checks to pass.
+
+### WP2 fidelity gate stage
+
+`validate` supports stage-aware WP2 gate enforcement via `WP2_GATE_STAGE`:
+
+- `WP2_GATE_STAGE=A` (default): instrumentation mode.
+  - Stage B-only WP2 thresholds (`Q-023`..`Q-030`) are emitted as warnings in report sections.
+  - Hard-fail conditions still fail immediately.
+- `WP2_GATE_STAGE=B`: hard gate mode.
+  - Stage B-only WP2 thresholds are enforced as check failures.
+
+Examples:
+
+```bash
+WP2_GATE_STAGE=A FULL_TARGET_SET=1 TARGET_PARTS="2 6 8 9" scripts/refresh_quality_artifacts.sh
+```
+
+```bash
+WP2_GATE_STAGE=B cargo run -- validate --cache-root .cache/iso26262
+```
 
 ### Full-target freshness mode (WP1)
 
@@ -88,3 +114,27 @@ Optional environment overrides:
 - `EXPECTED_DB_SCHEMA_VERSION` (default `0.3.0`)
 - `REBUILD_ON_COMPAT_MISMATCH=1` to archive DB and rebuild instead of hard-blocking
 - `ALLOW_BLOCKED_RESUME=1` to explicitly clear a blocked run-state and restart from `R04`
+
+### New-session bootstrap
+
+When starting a fresh terminal/session, bootstrap in this order:
+
+1. `export OPENCODE_CONFIG_DIR=...` (must exist; `R01` blocks when unset/missing).
+2. Confirm branch is `main` (`R00` mainline check).
+3. Run quick mode first for parser iteration:
+
+```bash
+PART=6 MAX_PAGES=60 WP2_GATE_STAGE=A scripts/refresh_quality_artifacts.sh
+```
+
+4. Run full-target refresh before promotion evidence:
+
+```bash
+FULL_TARGET_SET=1 TARGET_PARTS="2 6 8 9" WP2_GATE_STAGE=A scripts/refresh_quality_artifacts.sh
+```
+
+5. Run Stage B validate to inspect hard-gate readiness:
+
+```bash
+WP2_GATE_STAGE=B cargo run -- validate --cache-root .cache/iso26262
+```
