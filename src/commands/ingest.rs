@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +9,7 @@ use regex::Regex;
 use rusqlite::{Connection, params};
 use tracing::{info, warn};
 
-use crate::cli::IngestArgs;
+use crate::cli::{IngestArgs, OcrMode};
 use crate::commands::inventory;
 use crate::model::{
     IngestCounts, IngestPaths, IngestRunManifest, PdfEntry, PdfInventoryManifest, ToolVersions,
@@ -68,6 +68,9 @@ pub fn run(args: IngestArgs) -> Result<()> {
         args.max_pages_per_doc,
         args.seed_page_chunks,
         &args.target_parts,
+        args.ocr_mode,
+        &args.ocr_lang,
+        args.ocr_min_text_chars,
     )?;
 
     sync_fts_index(&connection)?;
@@ -128,7 +131,7 @@ pub fn run(args: IngestArgs) -> Result<()> {
             table_rows_with_descriptions_count: chunk_stats.table_rows_with_descriptions_count,
             table_marker_expected_count: chunk_stats.table_marker_expected_count,
             table_marker_observed_count: chunk_stats.table_marker_observed_count,
-            ocr_page_count: 0,
+            ocr_page_count: chunk_stats.ocr_page_count,
         },
         source_hashes: inventory.pdfs,
         warnings: chunk_stats.warnings,
@@ -378,6 +381,7 @@ fn upsert_docs(connection: &mut Connection, inventory: &PdfInventoryManifest) ->
 struct ChunkInsertStats {
     processed_pdf_count: usize,
     processed_parts: Vec<u32>,
+    ocr_page_count: usize,
     structured_chunks_inserted: usize,
     clause_chunks_inserted: usize,
     table_chunks_inserted: usize,
@@ -404,6 +408,13 @@ struct ChunkInsertStats {
     table_rows_with_descriptions_count: usize,
     table_marker_expected_count: usize,
     table_marker_observed_count: usize,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct ExtractedPages {
+    pages: Vec<String>,
+    ocr_page_count: usize,
     warnings: Vec<String>,
 }
 
@@ -648,6 +659,9 @@ fn insert_chunks(
     max_pages_per_doc: Option<usize>,
     seed_page_chunks: bool,
     target_parts: &[u32],
+    ocr_mode: OcrMode,
+    ocr_lang: &str,
+    ocr_min_text_chars: usize,
 ) -> Result<ChunkInsertStats> {
     let target_set: HashSet<u32> = target_parts.iter().copied().collect();
     let tx = connection.transaction()?;
@@ -751,9 +765,21 @@ fn insert_chunks(
                 continue;
             }
 
-            let pages = match extract_pages_with_pdftotext(&pdf_path, max_pages_per_doc) {
-                Ok(pages) => pages,
+            let page_extraction = match extract_pages_with_backend(
+                &pdf_path,
+                max_pages_per_doc,
+                ocr_mode,
+                ocr_lang,
+                ocr_min_text_chars,
+            ) {
+                Ok(extraction) => extraction,
                 Err(err) => {
+                    if matches!(ocr_mode, OcrMode::Force) {
+                        return Err(err).with_context(|| {
+                            format!("failed to extract text for {}", pdf_path.display())
+                        });
+                    }
+
                     let warning =
                         format!("failed to extract text for {}: {err}", pdf_path.display());
                     warn!(warning = %warning, "pdf extraction warning");
@@ -761,6 +787,9 @@ fn insert_chunks(
                     continue;
                 }
             };
+            let pages = page_extraction.pages;
+            stats.ocr_page_count += page_extraction.ocr_page_count;
+            stats.warnings.extend(page_extraction.warnings);
 
             let section_headings = match extract_section_headings_with_pdftohtml(&pdf_path) {
                 Ok(headings) => headings,
@@ -2624,6 +2653,203 @@ fn normalize_outline_label(raw_label: &str) -> String {
         .join(" ")
 }
 
+fn extract_pages_with_backend(
+    pdf_path: &Path,
+    max_pages_per_doc: Option<usize>,
+    ocr_mode: OcrMode,
+    ocr_lang: &str,
+    ocr_min_text_chars: usize,
+) -> Result<ExtractedPages> {
+    let pages = extract_pages_with_pdftotext(pdf_path, max_pages_per_doc)?;
+    let mut extraction = ExtractedPages {
+        pages,
+        ..ExtractedPages::default()
+    };
+
+    let candidate_pages = collect_ocr_candidates(&extraction.pages, ocr_mode, ocr_min_text_chars);
+    if candidate_pages.is_empty() {
+        return Ok(extraction);
+    }
+
+    if !command_available("pdftoppm") || !command_available("tesseract") {
+        let message = format!(
+            "OCR mode '{}' requested for {} pages but pdftoppm/tesseract are unavailable",
+            ocr_mode.as_str(),
+            candidate_pages.len()
+        );
+        if matches!(ocr_mode, OcrMode::Force) {
+            bail!(message);
+        }
+
+        extraction.warnings.push(message);
+        return Ok(extraction);
+    }
+
+    for page_number in candidate_pages {
+        let page_index = page_number.saturating_sub(1);
+        let current_text = extraction
+            .pages
+            .get(page_index)
+            .cloned()
+            .unwrap_or_default();
+
+        match extract_page_with_ocr(pdf_path, page_number, ocr_lang) {
+            Ok(ocr_text) => {
+                if ocr_text.trim().is_empty() && matches!(ocr_mode, OcrMode::Auto) {
+                    extraction.warnings.push(format!(
+                        "OCR text was empty for {} page {} in auto mode",
+                        pdf_path.display(),
+                        page_number
+                    ));
+                    continue;
+                }
+
+                if let Some(page) = extraction.pages.get_mut(page_index) {
+                    *page = ocr_text;
+                }
+                extraction.ocr_page_count += 1;
+            }
+            Err(error) => {
+                if matches!(ocr_mode, OcrMode::Force) {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed OCR extraction for {} page {}",
+                            pdf_path.display(),
+                            page_number
+                        )
+                    });
+                }
+
+                extraction.warnings.push(format!(
+                    "OCR fallback failed for {} page {}: {}",
+                    pdf_path.display(),
+                    page_number,
+                    error
+                ));
+                if let Some(page) = extraction.pages.get_mut(page_index) {
+                    *page = current_text;
+                }
+            }
+        }
+    }
+
+    Ok(extraction)
+}
+
+fn collect_ocr_candidates(
+    pages: &[String],
+    ocr_mode: OcrMode,
+    min_text_chars: usize,
+) -> Vec<usize> {
+    match ocr_mode {
+        OcrMode::Off => Vec::new(),
+        OcrMode::Force => (1..=pages.len()).collect(),
+        OcrMode::Auto => pages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, page)| {
+                if non_whitespace_char_count(page) < min_text_chars {
+                    Some(index + 1)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    }
+}
+
+fn non_whitespace_char_count(text: &str) -> usize {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .count()
+}
+
+fn extract_page_with_ocr(pdf_path: &Path, page_number: usize, ocr_lang: &str) -> Result<String> {
+    let pdf_stem = pdf_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("pdf");
+    let safe_stem = pdf_stem
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    let stamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let output_root = std::env::temp_dir().join(format!(
+        "iso26262_ocr_{}_{}_{}_{}",
+        safe_stem,
+        std::process::id(),
+        page_number,
+        stamp
+    ));
+    let png_path = PathBuf::from(format!("{}.png", output_root.display()));
+
+    let pdftoppm_output = Command::new("pdftoppm")
+        .arg("-f")
+        .arg(page_number.to_string())
+        .arg("-l")
+        .arg(page_number.to_string())
+        .arg("-singlefile")
+        .arg("-png")
+        .arg(pdf_path)
+        .arg(&output_root)
+        .output()
+        .with_context(|| format!("failed to execute pdftoppm for {}", pdf_path.display()))?;
+
+    if !pdftoppm_output.status.success() {
+        let stderr = String::from_utf8_lossy(&pdftoppm_output.stderr);
+        bail!(
+            "pdftoppm returned non-zero exit status for {} page {}: {}",
+            pdf_path.display(),
+            page_number,
+            stderr.trim()
+        );
+    }
+
+    if !png_path.exists() {
+        bail!(
+            "pdftoppm did not produce expected image for {} page {}",
+            pdf_path.display(),
+            page_number
+        );
+    }
+
+    let tesseract_output = Command::new("tesseract")
+        .arg(&png_path)
+        .arg("stdout")
+        .arg("-l")
+        .arg(ocr_lang)
+        .output()
+        .with_context(|| format!("failed to execute tesseract for {}", png_path.display()))?;
+
+    let _ = fs::remove_file(&png_path);
+
+    if !tesseract_output.status.success() {
+        let stderr = String::from_utf8_lossy(&tesseract_output.stderr);
+        bail!(
+            "tesseract returned non-zero exit status for {} page {}: {}",
+            pdf_path.display(),
+            page_number,
+            stderr.trim()
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&tesseract_output.stdout)
+        .replace('\u{0000}', "")
+        .trim()
+        .to_string())
+}
+
+fn command_available(program: &str) -> bool {
+    Command::new(program).arg("--version").output().is_ok()
+}
+
 fn extract_pages_with_pdftotext(
     pdf_path: &Path,
     max_pages_per_doc: Option<usize>,
@@ -2682,7 +2908,29 @@ fn collect_tool_versions() -> Result<ToolVersions> {
         rustc: command_version("rustc", &["--version"])?,
         cargo: command_version("cargo", &["--version"])?,
         pdftotext: command_version("pdftotext", &["-v"])?,
+        pdftohtml: command_version("pdftohtml", &["-v"])?,
+        pdftoppm: command_version_optional("pdftoppm", &["-v"]),
+        tesseract: command_version_optional("tesseract", &["--version"]),
     })
+}
+
+fn command_version_optional(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let source = if stdout.trim().is_empty() {
+        stderr.trim()
+    } else {
+        stdout.trim()
+    };
+
+    source
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
 }
 
 fn command_version(program: &str, args: &[&str]) -> Result<String> {
@@ -2752,12 +3000,22 @@ fn render_ingest_command(args: &IngestArgs) -> String {
         command.push("--max-pages-per-doc".to_string());
         command.push(max_pages.to_string());
     }
+    if args.ocr_mode != OcrMode::Off {
+        command.push("--ocr-mode".to_string());
+        command.push(args.ocr_mode.as_str().to_string());
+        command.push("--ocr-lang".to_string());
+        command.push(args.ocr_lang.clone());
+        command.push("--ocr-min-text-chars".to_string());
+        command.push(args.ocr_min_text_chars.to_string());
+    }
 
     command.join(" ")
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -2911,5 +3169,39 @@ mod tests {
         assert_eq!(paragraphs.len(), 3);
         assert_eq!(paragraphs[1], "NOTE 1 This is informative guidance.");
         assert_eq!(paragraphs[2], "a) first normative bullet");
+    }
+
+    #[test]
+    fn collect_ocr_candidates_auto_uses_text_threshold() {
+        let pages = vec![
+            "minimal".to_string(),
+            "this page has substantially more extractable text content".to_string(),
+            "tiny".to_string(),
+        ];
+
+        let candidates = collect_ocr_candidates(&pages, OcrMode::Auto, 10);
+        assert_eq!(candidates, vec![1, 3]);
+    }
+
+    #[test]
+    fn render_ingest_command_includes_ocr_flags_when_enabled() {
+        let args = IngestArgs {
+            cache_root: PathBuf::from(".cache/iso26262"),
+            inventory_manifest_path: None,
+            ingest_manifest_path: None,
+            db_path: None,
+            refresh_inventory: false,
+            seed_page_chunks: false,
+            target_parts: vec![6],
+            max_pages_per_doc: Some(5),
+            ocr_mode: OcrMode::Auto,
+            ocr_lang: "eng".to_string(),
+            ocr_min_text_chars: 200,
+        };
+
+        let command = render_ingest_command(&args);
+        assert!(command.contains("--ocr-mode auto"));
+        assert!(command.contains("--ocr-lang eng"));
+        assert!(command.contains("--ocr-min-text-chars 200"));
     }
 }

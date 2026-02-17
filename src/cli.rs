@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -59,6 +59,32 @@ pub struct IngestArgs {
 
     #[arg(long)]
     pub max_pages_per_doc: Option<usize>,
+
+    #[arg(long, value_enum, default_value_t = OcrMode::Off)]
+    pub ocr_mode: OcrMode,
+
+    #[arg(long, default_value = "eng")]
+    pub ocr_lang: String,
+
+    #[arg(long, default_value_t = 120)]
+    pub ocr_min_text_chars: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum OcrMode {
+    Off,
+    Auto,
+    Force,
+}
+
+impl OcrMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Force => "force",
+        }
+    }
 }
 
 #[derive(Args, Debug, Clone)]

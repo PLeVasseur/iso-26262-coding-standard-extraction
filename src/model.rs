@@ -53,6 +53,9 @@ pub struct ToolVersions {
     pub rustc: String,
     pub cargo: String,
     pub pdftotext: String,
+    pub pdftohtml: String,
+    pub pdftoppm: Option<String>,
+    pub tesseract: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
