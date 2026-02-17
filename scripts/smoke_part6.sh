@@ -132,6 +132,7 @@ assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-014").result)
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-015").result) == "pass"' 'Q-015 marker extraction coverage passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-016").result) == "pass"' 'Q-016 marker citation accuracy passes'
 assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-017").result) == "pass"' 'Q-017 paragraph citation accuracy passes'
+assert_jq_file "$REPORT_PATH" '(.checks[] | select(.check_id == "Q-018").result) == "pass"' 'Q-018 structural invariants pass'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_sparse_row_ratio <= 0.20' 'table sparse-row ratio is within threshold'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_overloaded_row_ratio <= 0.10' 'table overloaded-row ratio is within threshold'
 assert_jq_file "$REPORT_PATH" '.table_quality_scorecard.table_marker_sequence_coverage >= 0.90' 'table marker-sequence coverage meets threshold'
@@ -150,8 +151,11 @@ assert_jq_json "$PARAGRAPH_JSON" '.returned >= 1 and .results[0].leaf_node_type 
 LIST_ITEM_JSON="$(run_query_json "$BIN_PATH" "9.1 item 2" --node-type list_item)"
 assert_jq_json "$LIST_ITEM_JSON" '.returned >= 1 and .results[0].leaf_node_type == "list_item" and .results[0].anchor_type == "marker" and .results[0].anchor_label_norm == "b" and (.results[0].citation | contains("9.1(b)"))' 'list item marker-first citation sample succeeds'
 
-NOTE_ITEM_JSON="$(run_query_json "$BIN_PATH" "5.2 item 2" --node-type list_item)"
-assert_jq_json "$NOTE_ITEM_JSON" '.returned >= 1 and .results[0].anchor_type == "marker" and .results[0].anchor_label_norm == "NOTE 1" and (.results[0].citation | contains("NOTE 1"))' 'NOTE marker sample query succeeds'
+NOTE_ITEM_JSON="$(run_query_json "$BIN_PATH" "5.2 note 2" --node-type note_item)"
+assert_jq_json "$NOTE_ITEM_JSON" '.returned >= 1 and .results[0].leaf_node_type == "note_item" and .results[0].parent_ref == "5.2" and .results[0].anchor_type == "marker" and .results[0].anchor_label_norm == "NOTE 1" and (.results[0].citation | contains("NOTE 1"))' 'NOTE marker sample query succeeds'
+
+NOTE_AS_LIST_JSON="$(run_query_json "$BIN_PATH" "5.2 note 2" --node-type list_item)"
+assert_jq_json "$NOTE_AS_LIST_JSON" '.returned == 0' 'NOTE query is excluded from list_item results'
 
 TABLE_JSON="$(run_query_json "$BIN_PATH" "Table 3")"
 assert_jq_json "$TABLE_JSON" '.returned >= 1 and .results[0].leaf_node_type == "table" and .results[0].anchor_type == "clause"' 'table sample query succeeds'
@@ -233,6 +237,8 @@ if [[ "$SMOKE_IDEMPOTENCE" == "1" ]]; then
     table_row_nodes_inserted,
     table_cell_nodes_inserted,
     list_item_nodes_inserted,
+    note_nodes_inserted,
+    note_item_nodes_inserted,
     paragraph_nodes_inserted,
     table_sparse_rows_count,
     table_overloaded_rows_count,
@@ -246,6 +252,8 @@ if [[ "$SMOKE_IDEMPOTENCE" == "1" ]]; then
     table_row_nodes_inserted,
     table_cell_nodes_inserted,
     list_item_nodes_inserted,
+    note_nodes_inserted,
+    note_item_nodes_inserted,
     paragraph_nodes_inserted,
     table_sparse_rows_count,
     table_overloaded_rows_count,
