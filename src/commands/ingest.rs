@@ -706,6 +706,86 @@ impl StructuredChunkParser {
     }
 }
 
+fn split_long_structured_chunks(chunks: Vec<StructuredChunkDraft>) -> Vec<StructuredChunkDraft> {
+    let mut expanded = Vec::<StructuredChunkDraft>::new();
+
+    for chunk in chunks {
+        if !matches!(chunk.chunk_type, ChunkType::Clause | ChunkType::Annex) {
+            expanded.push(chunk);
+            continue;
+        }
+
+        let body = body_without_heading(&chunk.text, &chunk.heading);
+        let body_word_count = body.split_whitespace().count();
+        if body_word_count <= 900 {
+            expanded.push(chunk);
+            continue;
+        }
+
+        let heading_words = chunk.heading.split_whitespace().count();
+        let max_segment_words = 900usize.saturating_sub(heading_words).max(300);
+        let overlap_words = 75.min(max_segment_words.saturating_sub(1));
+
+        for segment in split_words_with_overlap(&body, max_segment_words, overlap_words) {
+            let text = format!("{}\n\n{}", chunk.heading, segment);
+            expanded.push(StructuredChunkDraft {
+                chunk_type: chunk.chunk_type,
+                reference: chunk.reference.clone(),
+                ref_path: chunk.ref_path.clone(),
+                heading: chunk.heading.clone(),
+                text,
+                page_start: chunk.page_start,
+                page_end: chunk.page_end,
+            });
+        }
+    }
+
+    expanded
+}
+
+fn body_without_heading(text: &str, heading: &str) -> String {
+    let mut lines = text.lines().collect::<Vec<&str>>();
+    if lines
+        .first()
+        .map(|line| line.trim() == heading.trim())
+        .unwrap_or(false)
+    {
+        lines.remove(0);
+    }
+
+    lines.join(" ")
+}
+
+fn split_words_with_overlap(text: &str, max_words: usize, overlap_words: usize) -> Vec<String> {
+    let words = text.split_whitespace().collect::<Vec<&str>>();
+    if words.is_empty() {
+        return vec![String::new()];
+    }
+    if words.len() <= max_words {
+        return vec![words.join(" ")];
+    }
+
+    let mut segments = Vec::<String>::new();
+    let mut start = 0usize;
+
+    while start < words.len() {
+        let end = (start + max_words).min(words.len());
+        segments.push(words[start..end].join(" "));
+
+        if end == words.len() {
+            break;
+        }
+
+        let mut next_start = end.saturating_sub(overlap_words);
+        if next_start <= start {
+            next_start = end;
+        }
+        start = next_start;
+    }
+
+    segments
+}
+
 fn insert_chunks(
     connection: &mut Connection,
     cache_root: &Path,
@@ -962,8 +1042,8 @@ fn insert_chunks(
                 increment_node_type_stat(&mut stats, NodeType::SectionHeading);
             }
 
-            let structured_chunks = parser.parse_pages(&pages);
-            let mut structured_seq: i64 = 1;
+            let structured_chunks = split_long_structured_chunks(parser.parse_pages(&pages));
+            let mut chunk_seq_by_ref = HashMap::<String, i64>::new();
 
             for chunk in structured_chunks {
                 let origin_node_type = chunk_origin_node_type(chunk.chunk_type, &chunk.reference);
@@ -1002,6 +1082,13 @@ fn insert_chunks(
                     &chunk.reference,
                     &chunk.heading,
                 );
+                let structured_seq = {
+                    let next = chunk_seq_by_ref
+                        .entry(chunk.reference.clone())
+                        .and_modify(|value| *value += 1)
+                        .or_insert(1);
+                    *next
+                };
                 let node_anchor_type = match origin_node_type {
                     NodeType::Clause | NodeType::Subclause | NodeType::Annex | NodeType::Table => {
                         Some("clause")
@@ -1246,8 +1333,6 @@ fn insert_chunks(
                         )?;
                     }
                 }
-
-                structured_seq += 1;
             }
 
             if seed_page_chunks {
@@ -3619,6 +3704,53 @@ mod tests {
         assert_eq!(
             detect_printed_page_label(roman_page),
             Some("ii".to_string())
+        );
+    }
+
+    #[test]
+    fn split_words_with_overlap_limits_chunk_size() {
+        let text = (0..1200)
+            .map(|index| format!("w{index}"))
+            .collect::<Vec<String>>()
+            .join(" ");
+
+        let segments = split_words_with_overlap(&text, 900, 75);
+        assert!(segments.len() >= 2);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| segment.split_whitespace().count() <= 900)
+        );
+    }
+
+    #[test]
+    fn split_long_structured_chunks_preserves_reference_and_heading() {
+        let body = (0..1200)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<String>>()
+            .join(" ");
+        let input = StructuredChunkDraft {
+            chunk_type: ChunkType::Clause,
+            reference: "5.2".to_string(),
+            ref_path: "5 > 2".to_string(),
+            heading: "5.2 Software safety".to_string(),
+            text: format!("5.2 Software safety\n\n{body}"),
+            page_start: 10,
+            page_end: 12,
+        };
+
+        let expanded = split_long_structured_chunks(vec![input]);
+        assert!(expanded.len() >= 2);
+        assert!(expanded.iter().all(|chunk| chunk.reference == "5.2"));
+        assert!(
+            expanded
+                .iter()
+                .all(|chunk| chunk.heading == "5.2 Software safety")
+        );
+        assert!(
+            expanded
+                .iter()
+                .all(|chunk| chunk.page_start == 10 && chunk.page_end == 12)
         );
     }
 }
