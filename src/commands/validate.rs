@@ -1704,7 +1704,7 @@ fn collect_structural_invariants(connection: &Connection) -> Result<StructuralIn
             FROM nodes child
             JOIN nodes parent ON parent.node_id = child.parent_node_id
             WHERE child.node_type = 'list_item'
-              AND parent.node_type <> 'list'
+              AND parent.node_type NOT IN ('list', 'list_item')
             ",
         )?,
         invalid_note_parent_count: query_violation_count(

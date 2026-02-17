@@ -285,6 +285,9 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
     ensure_column_exists(connection, "nodes", "anchor_label_norm TEXT")?;
     ensure_column_exists(connection, "nodes", "anchor_order INTEGER")?;
     ensure_column_exists(connection, "nodes", "citation_anchor_id TEXT")?;
+    ensure_column_exists(connection, "nodes", "list_depth INTEGER")?;
+    ensure_column_exists(connection, "nodes", "list_marker_style TEXT")?;
+    ensure_column_exists(connection, "nodes", "item_index INTEGER")?;
     ensure_column_exists(connection, "chunks", "origin_node_id TEXT")?;
     ensure_column_exists(connection, "chunks", "leaf_node_type TEXT")?;
     ensure_column_exists(connection, "chunks", "ancestor_path TEXT")?;
@@ -565,6 +568,7 @@ struct TableQualityCounters {
 struct ListItemDraft {
     marker: String,
     marker_norm: String,
+    marker_style: String,
     text: String,
     depth: i64,
 }
@@ -856,9 +860,10 @@ fn insert_chunks(
             INSERT INTO nodes(
               node_id, parent_node_id, doc_id, node_type, ref, ref_path, heading,
               order_index, page_pdf_start, page_pdf_end, text, source_hash, ancestor_path,
-              anchor_type, anchor_label_raw, anchor_label_norm, anchor_order, citation_anchor_id
+              anchor_type, anchor_label_raw, anchor_label_norm, anchor_order, citation_anchor_id,
+              list_depth, list_marker_style, item_index
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
             ON CONFLICT(node_id) DO UPDATE SET
               parent_node_id=excluded.parent_node_id,
               doc_id=excluded.doc_id,
@@ -876,7 +881,10 @@ fn insert_chunks(
               anchor_label_raw=excluded.anchor_label_raw,
               anchor_label_norm=excluded.anchor_label_norm,
               anchor_order=excluded.anchor_order,
-              citation_anchor_id=excluded.citation_anchor_id
+              citation_anchor_id=excluded.citation_anchor_id,
+              list_depth=excluded.list_depth,
+              list_marker_style=excluded.list_marker_style,
+              item_index=excluded.item_index
             ",
         )?;
 
@@ -976,6 +984,9 @@ fn insert_chunks(
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
             )?;
 
             stats.nodes_total += 1;
@@ -1033,6 +1044,9 @@ fn insert_chunks(
                     Some(&section.reference),
                     section_anchor_order,
                     Some(&section_anchor_id),
+                    None,
+                    None,
+                    None,
                 )?;
 
                 node_paths.insert(section_node_id.clone(), section_path);
@@ -1126,6 +1140,9 @@ fn insert_chunks(
                     node_anchor_type.map(|_| chunk.reference.as_str()),
                     node_anchor_order,
                     node_anchor_id.as_deref(),
+                    None,
+                    None,
+                    None,
                 )?;
 
                 node_paths.insert(origin_node_id.clone(), ancestor_path.clone());
@@ -1377,6 +1394,9 @@ fn insert_chunks(
                         None,
                         None,
                         None,
+                        None,
+                        None,
+                        None,
                     )?;
                     node_order_index += 1;
                     stats.nodes_total += 1;
@@ -1521,6 +1541,9 @@ fn insert_node(
     anchor_label_norm: Option<&str>,
     anchor_order: Option<i64>,
     citation_anchor_id: Option<&str>,
+    list_depth: Option<i64>,
+    list_marker_style: Option<&str>,
+    item_index: Option<i64>,
 ) -> Result<()> {
     statement.execute(params![
         node_id,
@@ -1540,7 +1563,10 @@ fn insert_node(
         anchor_label_raw,
         anchor_label_norm,
         anchor_order,
-        citation_anchor_id
+        citation_anchor_id,
+        list_depth,
+        list_marker_style,
+        item_index
     ])?;
     Ok(())
 }
@@ -1595,6 +1621,9 @@ fn insert_table_child_nodes(
             Some(&row_label),
             Some(row_order),
             Some(&row_anchor_id),
+            None,
+            None,
+            None,
         )?;
 
         *node_order_index += 1;
@@ -1641,6 +1670,9 @@ fn insert_table_child_nodes(
                 Some(&cell_label),
                 Some(cell_order),
                 Some(&cell_anchor_id),
+                None,
+                None,
+                None,
             )?;
 
             *node_order_index += 1;
@@ -2186,6 +2218,9 @@ fn insert_paragraph_nodes(
             Some(&paragraph_label),
             Some(paragraph_order),
             Some(&paragraph_anchor_id),
+            None,
+            None,
+            None,
         )?;
 
         *node_order_index += 1;
@@ -2202,7 +2237,7 @@ fn parse_list_items(
     list_item_regex: &Regex,
     note_item_regex: &Regex,
 ) -> (Vec<ListItemDraft>, bool) {
-    let body_lines = extract_body_lines(text, heading);
+    let body_lines = extract_body_lines_preserve_blanks(text, heading);
     let mut items = Vec::<ListItemDraft>::new();
     let mut list_like_lines = 0usize;
     let mut active_item: Option<ListItemDraft> = None;
@@ -2236,16 +2271,24 @@ fn parse_list_items(
                 .map(|value| value.as_str().to_string())
                 .unwrap_or_else(|| "-".to_string());
             let marker_norm = normalize_marker_label(&marker);
+            let marker_style = classify_list_marker_style(&marker_norm).to_string();
             let body = captures
                 .name("body")
                 .map(|value| value.as_str().trim().to_string())
                 .unwrap_or_default();
+            let mut depth = infer_list_depth(raw_line);
+            if depth == 1 {
+                if let Some(previous) = items.last() {
+                    depth = infer_depth_from_marker_transition(previous, &marker_style, depth);
+                }
+            }
 
             active_item = Some(ListItemDraft {
                 marker,
                 marker_norm,
+                marker_style,
                 text: body,
-                depth: 1,
+                depth,
             });
             continue;
         }
@@ -2379,6 +2422,61 @@ fn reorder_list_items_for_marker_sequence(items: &mut Vec<ListItemDraft>) {
     }
 }
 
+fn infer_list_depth(raw_line: &str) -> i64 {
+    let indent_units = raw_line
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .map(|ch| if ch == '\t' { 4usize } else { 1usize })
+        .sum::<usize>();
+
+    let normalized = (indent_units / 2).min(5);
+    (normalized as i64) + 1
+}
+
+fn classify_list_marker_style(marker_norm: &str) -> &'static str {
+    if marker_norm == "-" {
+        return "bullet";
+    }
+
+    if marker_norm.chars().all(|ch| ch.is_ascii_digit()) {
+        return "numeric";
+    }
+
+    if marker_norm.len() == 1 && marker_norm.chars().all(|ch| ch.is_ascii_lowercase()) {
+        return "alpha";
+    }
+
+    if is_roman_marker(marker_norm) {
+        return "roman";
+    }
+
+    if parse_numeric_alpha_marker(marker_norm).is_some() {
+        return "alnum";
+    }
+
+    "symbol"
+}
+
+fn infer_depth_from_marker_transition(
+    previous: &ListItemDraft,
+    marker_style: &str,
+    fallback_depth: i64,
+) -> i64 {
+    match (previous.marker_style.as_str(), marker_style) {
+        ("numeric", "alpha") | ("numeric", "roman") | ("alpha", "bullet") => {
+            (previous.depth + 1).min(6)
+        }
+        _ => fallback_depth,
+    }
+}
+
+fn is_roman_marker(value: &str) -> bool {
+    value.len() >= 2
+        && value
+            .chars()
+            .all(|ch| matches!(ch, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
+}
+
 fn parse_numeric_alpha_marker(value: &str) -> Option<(i64, Option<char>)> {
     let mut digits = String::new();
     let mut suffix: Option<char> = None;
@@ -2450,17 +2548,52 @@ fn insert_list_nodes(
         None,
         None,
         None,
+        None,
+        None,
+        None,
     )?;
 
     *node_order_index += 1;
     stats.nodes_total += 1;
     increment_node_type_stat(stats, NodeType::List);
 
+    let mut last_item_node_id_by_depth = HashMap::<i64, String>::new();
+    let mut item_index_by_parent = HashMap::<String, i64>::new();
+
     for (item_idx, item) in list_items.iter().enumerate() {
+        let mut effective_depth = item.depth.max(1);
+        while effective_depth > 1
+            && !last_item_node_id_by_depth.contains_key(&(effective_depth - 1))
+        {
+            effective_depth -= 1;
+        }
+
+        let parent_item_node_id = if effective_depth == 1 {
+            list_node_id.clone()
+        } else {
+            last_item_node_id_by_depth
+                .get(&(effective_depth - 1))
+                .cloned()
+                .unwrap_or_else(|| list_node_id.clone())
+        };
+
+        last_item_node_id_by_depth.retain(|depth, _| *depth < effective_depth);
+
+        let item_index = {
+            let entry = item_index_by_parent
+                .entry(parent_item_node_id.clone())
+                .or_insert(0);
+            *entry += 1;
+            *entry
+        };
+
         let list_item_node_id = format!("{}:item:{:03}", list_node_id, item_idx + 1);
         let list_item_ref = format!("{} item {}", reference, item_idx + 1);
         let list_item_heading = format!("{} {}", item.marker, item.text);
-        let list_item_path = format!("{} > list_item:{}", list_path, item_idx + 1);
+        let list_item_path = format!(
+            "{} > list_item:d{}:{}",
+            list_path, effective_depth, item_index
+        );
         let marker_order = (item_idx + 1) as i64;
         let marker_anchor_id = build_citation_anchor_id(
             doc_id,
@@ -2473,7 +2606,7 @@ fn insert_list_nodes(
         insert_node(
             node_statement,
             &list_item_node_id,
-            Some(&list_node_id),
+            Some(&parent_item_node_id),
             doc_id,
             NodeType::ListItem,
             Some(&list_item_ref),
@@ -2490,12 +2623,16 @@ fn insert_list_nodes(
             Some(&item.marker_norm),
             Some(marker_order),
             Some(&marker_anchor_id),
+            Some(effective_depth),
+            Some(item.marker_style.as_str()),
+            Some(item_index),
         )?;
+
+        last_item_node_id_by_depth.insert(effective_depth, list_item_node_id.clone());
 
         *node_order_index += 1;
         stats.nodes_total += 1;
         increment_node_type_stat(stats, NodeType::ListItem);
-        let _ = item.depth;
     }
 
     Ok(())
@@ -2535,6 +2672,9 @@ fn insert_note_nodes(
         None,
         source_hash,
         &note_path,
+        None,
+        None,
+        None,
         None,
         None,
         None,
@@ -2580,6 +2720,9 @@ fn insert_note_nodes(
             Some(&item.marker_norm),
             Some(marker_order),
             Some(&marker_anchor_id),
+            None,
+            None,
+            None,
         )?;
 
         *node_order_index += 1;
@@ -2642,6 +2785,9 @@ fn insert_requirement_atom_nodes(
             Some(atom),
             source_hash,
             &atom_path,
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -3561,6 +3707,30 @@ mod tests {
         assert_eq!(list_items.len(), 2);
         assert_eq!(list_items[0].marker_norm, "a");
         assert_eq!(list_items[1].marker_norm, "b");
+    }
+
+    #[test]
+    fn parse_list_items_captures_depth_and_marker_style() {
+        let list_item_regex = Regex::new(
+            r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
+        )
+        .expect("list regex compiles");
+        let note_item_regex = Regex::new(r"^(?i)(?P<marker>NOTE(?:\s+\d+)?)(?:\s+(?P<body>.+))?$")
+            .expect("note regex compiles");
+
+        let text =
+            "6.4 Heading\n1) top-level item\n  a) nested alpha item\n    - nested bullet item";
+        let (list_items, fallback) =
+            parse_list_items(text, "6.4 Heading", &list_item_regex, &note_item_regex);
+
+        assert!(!fallback);
+        assert_eq!(list_items.len(), 3);
+        assert_eq!(list_items[0].marker_style, "numeric");
+        assert_eq!(list_items[0].depth, 1);
+        assert_eq!(list_items[1].marker_style, "alpha");
+        assert_eq!(list_items[1].depth, 2);
+        assert_eq!(list_items[2].marker_style, "bullet");
+        assert_eq!(list_items[2].depth, 3);
     }
 
     #[test]
