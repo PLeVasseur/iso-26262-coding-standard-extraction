@@ -321,4 +321,3 @@ fn insert_requirement_atom_nodes(
 
     Ok(())
 }
-

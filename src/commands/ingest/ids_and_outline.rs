@@ -157,4 +157,3 @@ fn normalize_outline_label(raw_label: &str) -> String {
         .collect::<Vec<&str>>()
         .join(" ")
 }
-

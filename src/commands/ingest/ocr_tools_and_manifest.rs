@@ -251,4 +251,3 @@ fn render_ingest_command(args: &IngestArgs) -> String {
 
     command.join(" ")
 }
-

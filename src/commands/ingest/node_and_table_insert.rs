@@ -272,4 +272,3 @@ fn insert_table_child_nodes(
 
     Ok(())
 }
-

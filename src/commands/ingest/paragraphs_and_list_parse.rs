@@ -399,4 +399,3 @@ fn parse_numeric_alpha_marker(value: &str) -> Option<(i64, Option<char>)> {
     let number = digits.parse::<i64>().ok()?;
     Some((number, suffix))
 }
-

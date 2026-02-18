@@ -426,4 +426,3 @@ fn collect_ocr_candidates(
             .collect(),
     }
 }
-

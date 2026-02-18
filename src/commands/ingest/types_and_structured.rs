@@ -388,4 +388,3 @@ fn split_words_with_overlap(text: &str, max_words: usize, overlap_words: usize) 
 
     segments
 }
-

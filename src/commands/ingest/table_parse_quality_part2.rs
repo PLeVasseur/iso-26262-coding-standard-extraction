@@ -1,10 +1,12 @@
-
 fn infer_table_header_rows(rows: &[Vec<String>]) -> usize {
     let Some(first_row) = rows.first() else {
         return 0;
     };
 
-    let first_cell = first_row.first().map(|value| value.as_str()).unwrap_or_default();
+    let first_cell = first_row
+        .first()
+        .map(|value| value.as_str())
+        .unwrap_or_default();
     let first_row_has_marker = parse_table_marker_token(first_cell).is_some();
     if first_row_has_marker {
         return 0;
@@ -16,7 +18,11 @@ fn infer_table_header_rows(rows: &[Vec<String>]) -> usize {
         .filter(|cell| !cell.is_empty())
         .count();
 
-    if non_empty_cells >= 2 { 1 } else { 0 }
+    if non_empty_cells >= 2 {
+        1
+    } else {
+        0
+    }
 }
 
 fn count_row_marker_tokens(row: &[String]) -> usize {
@@ -279,11 +285,12 @@ fn line_is_noise(line: &str) -> bool {
 fn contains_iso_watermark_noise(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     let has_store_download = lower.contains("iso store order") && lower.contains("downloaded:");
-    let has_single_user_notice =
-        (lower.contains("single user licence only") || lower.contains("single user license only"))
-            && lower.contains("networking prohibited");
-    let has_license_banner =
-        lower.contains("licensed to") && lower.contains("license #") && lower.contains("downloaded:");
+    let has_single_user_notice = (lower.contains("single user licence only")
+        || lower.contains("single user license only"))
+        && lower.contains("networking prohibited");
+    let has_license_banner = lower.contains("licensed to")
+        && lower.contains("license #")
+        && lower.contains("downloaded:");
 
     has_store_download || has_single_user_notice || has_license_banner
 }
@@ -366,4 +373,3 @@ fn escape_csv_cell(value: &str) -> String {
         value.to_string()
     }
 }
-
