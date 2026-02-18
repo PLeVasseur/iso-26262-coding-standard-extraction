@@ -6,6 +6,25 @@ SHELL_MAX="${SHELL_MAX:-500}"
 MODE="${MODE:-warn}"
 EXCEPTIONS_FILE="${EXCEPTIONS_FILE:-${OPENCODE_CONFIG_DIR:-}/plans/wp3-modularization-exceptions.md}"
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'EOF'
+Usage: scripts/check_file_size_budget.sh
+
+Advisory-first file-size review for tracked Rust and shell files.
+
+Environment overrides:
+  RUST_MAX         Max lines for .rs files (default: 500)
+  SHELL_MAX        Max lines for .sh files (default: 500)
+  MODE             warn (default, advisory) or enforce (fails on breaches)
+  EXCEPTIONS_FILE  Optional exemptions list
+
+Examples:
+  scripts/check_file_size_budget.sh
+  MODE=enforce scripts/check_file_size_budget.sh
+EOF
+  exit 0
+fi
+
 if [[ "${MODE}" != "warn" && "${MODE}" != "enforce" ]]; then
   printf '[size-budget][FAIL] MODE must be warn or enforce (got: %s)\n' "${MODE}" >&2
   exit 2
@@ -61,19 +80,19 @@ for path in "${SHELL_FILES[@]}"; do
 done
 
 if (( ${#BREACHES[@]} == 0 )); then
-  printf '[size-budget] PASS: all tracked .rs/.sh files are within configured limits\n'
+  printf '[size-budget][ADVISORY] no non-exempt .rs/.sh files exceed configured review thresholds\n'
   exit 0
 fi
 
-printf '[size-budget] Found %s file-size breach(es):\n' "${#BREACHES[@]}"
+printf '[size-budget][ADVISORY] found %s review item(s) above line thresholds:\n' "${#BREACHES[@]}"
 for breach in "${BREACHES[@]}"; do
   IFS='|' read -r kind path lines limit <<< "${breach}"
   printf '  - [%s] %s has %s lines (limit %s)\n' "${kind}" "${path}" "${lines}" "${limit}"
 done
 
 if [[ "${MODE}" == "enforce" ]]; then
-  printf '[size-budget][FAIL] mode=enforce and non-exempt breaches were found\n' >&2
+  printf '[size-budget][FAIL] mode=enforce and non-exempt review items were found\n' >&2
   exit 1
 fi
 
-printf '[size-budget][WARN] mode=warn; continuing despite breaches\n'
+printf '[size-budget][WARN] mode=warn (advisory); continuing without blocking\n'
