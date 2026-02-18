@@ -1,10 +1,30 @@
-fn upsert_candidate(dedup: &mut HashMap<String, QueryCandidate>, candidate: QueryCandidate) {
-    match dedup.get(&candidate.chunk_id) {
-        Some(existing) if existing.score >= candidate.score => {}
-        _ => {
-            dedup.insert(candidate.chunk_id.clone(), candidate);
+fn upsert_candidate(dedup: &mut HashMap<String, QueryCandidate>, mut candidate: QueryCandidate) {
+    let Some(existing) = dedup.get_mut(&candidate.chunk_id) else {
+        dedup.insert(candidate.chunk_id.clone(), candidate);
+        return;
+    };
+
+    let replace_existing = candidate.score > existing.score;
+    if replace_existing {
+        inherit_candidate_traces(&mut candidate, existing);
+        *existing = candidate;
+    } else {
+        inherit_candidate_traces(existing, &candidate);
+    }
+}
+
+fn inherit_candidate_traces(target: &mut QueryCandidate, source: &QueryCandidate) {
+    for tag in &source.source_tags {
+        if target.source_tags.iter().all(|value| value != tag) {
+            target.source_tags.push(tag.clone());
         }
     }
+
+    target.lexical_rank = target.lexical_rank.or(source.lexical_rank);
+    target.semantic_rank = target.semantic_rank.or(source.semantic_rank);
+    target.lexical_score = target.lexical_score.or(source.lexical_score);
+    target.semantic_score = target.semantic_score.or(source.semantic_score);
+    target.rrf_score = target.rrf_score.or(source.rrf_score);
 }
 
 fn to_results(
@@ -40,7 +60,15 @@ fn to_results(
         out.push(QueryResult {
             rank: index + 1,
             score: candidate.score,
-            match_kind: candidate.match_kind.to_string(),
+            match_kind: candidate.match_kind,
+            source_tags: candidate.source_tags,
+            rank_trace: QueryRankTrace {
+                lexical_rank: candidate.lexical_rank,
+                semantic_rank: candidate.semantic_rank,
+                lexical_score: candidate.lexical_score,
+                semantic_score: candidate.semantic_score,
+                rrf_score: candidate.rrf_score,
+            },
             chunk_id: candidate.chunk_id,
             doc_id: candidate.doc_id,
             part: candidate.part,
@@ -70,12 +98,14 @@ fn to_results(
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_json_response(
     query_text: &str,
     limit: usize,
     part_filter: Option<u32>,
     chunk_type_filter: Option<String>,
     node_type_filter: Option<String>,
+    retrieval: RetrievalMetadata,
     results: Vec<QueryResult>,
 ) -> Result<()> {
     let response = QueryResponse {
@@ -85,6 +115,7 @@ fn write_json_response(
         part_filter,
         chunk_type_filter,
         node_type_filter,
+        retrieval,
         results,
     };
 
@@ -96,10 +127,22 @@ fn write_json_response(
     Ok(())
 }
 
-fn write_text_response(query_text: &str, results: &[QueryResult]) -> Result<()> {
+fn write_text_response(
+    query_text: &str,
+    retrieval: &RetrievalMetadata,
+    results: &[QueryResult],
+) -> Result<()> {
     let mut output = io::BufWriter::new(io::stdout().lock());
 
     writeln!(output, "Query: {query_text}")?;
+    writeln!(
+        output,
+        "Retrieval: requested={} effective={} fusion={} fallback_used={}",
+        retrieval.requested_mode,
+        retrieval.effective_mode,
+        retrieval.fusion,
+        retrieval.fallback_used
+    )?;
     writeln!(output, "Results: {}", results.len())?;
 
     for result in results {
@@ -121,9 +164,19 @@ fn write_text_response(query_text: &str, results: &[QueryResult]) -> Result<()> 
         )?;
         writeln!(
             output,
-            "\tmatch={} score={:.3} chunk_id={}",
+            "\tmatch={} score={:.6} chunk_id={}",
             result.match_kind, result.score, result.chunk_id
         )?;
+        writeln!(output, "\tsources={}", result.source_tags.join(","))?;
+        if let Some(lexical_rank) = result.rank_trace.lexical_rank {
+            writeln!(output, "\tlexical_rank: {lexical_rank}")?;
+        }
+        if let Some(semantic_rank) = result.rank_trace.semantic_rank {
+            writeln!(output, "\tsemantic_rank: {semantic_rank}")?;
+        }
+        if let Some(rrf_score) = result.rank_trace.rrf_score {
+            writeln!(output, "\trrf_score: {rrf_score:.6}")?;
+        }
         if let Some(origin_node_id) = &result.origin_node_id {
             writeln!(output, "\torigin_node_id: {origin_node_id}")?;
         }
@@ -155,4 +208,3 @@ fn write_text_response(query_text: &str, results: &[QueryResult]) -> Result<()> 
     output.flush()?;
     Ok(())
 }
-

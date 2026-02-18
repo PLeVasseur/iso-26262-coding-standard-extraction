@@ -67,9 +67,12 @@ struct TableSemanticsMetrics {
 }
 
 fn compute_table_semantics_metrics(connection: &Connection) -> Result<TableSemanticsMetrics> {
-    let (table_cells_total, table_cells_semantics_complete, invalid_span_count):
-        (usize, usize, usize) = connection.query_row(
-            "
+    let (table_cells_total, table_cells_semantics_complete, invalid_span_count): (
+        usize,
+        usize,
+        usize,
+    ) = connection.query_row(
+        "
             SELECT
               COUNT(*),
               SUM(
@@ -95,15 +98,15 @@ fn compute_table_semantics_metrics(connection: &Connection) -> Result<TableSeman
             FROM nodes
             WHERE node_type = 'table_cell'
             ",
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)? as usize,
-                    row.get::<_, i64>(1).unwrap_or(0) as usize,
-                    row.get::<_, i64>(2).unwrap_or(0) as usize,
-                ))
-            },
-        )?;
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get::<_, i64>(1).unwrap_or(0) as usize,
+                row.get::<_, i64>(2).unwrap_or(0) as usize,
+            ))
+        },
+    )?;
 
     let (header_cells_total, header_cells_flagged): (usize, usize) = connection.query_row(
         "
@@ -228,3 +231,151 @@ struct CitationParityComputation {
     page_range_parity: Option<f64>,
 }
 
+#[derive(Debug, Default)]
+struct SemanticEmbeddingMetrics {
+    active_model_id: String,
+    embedding_dim: Option<usize>,
+    eligible_chunks: usize,
+    embedded_chunks: usize,
+    stale_rows: usize,
+    embedding_rows_for_active_model: usize,
+}
+
+fn compute_semantic_embedding_metrics(connection: &Connection) -> Result<SemanticEmbeddingMetrics> {
+    let has_embedding_tables: i64 = connection.query_row(
+        "
+        SELECT COUNT(*)
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN ('embedding_models', 'chunk_embeddings')
+        ",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_embedding_tables < 2 {
+        return Ok(SemanticEmbeddingMetrics {
+            active_model_id: DEFAULT_MODEL_ID.to_string(),
+            ..SemanticEmbeddingMetrics::default()
+        });
+    }
+
+    let active_model = connection
+        .query_row(
+            "
+            SELECT model_id, dimensions
+            FROM embedding_models
+            ORDER BY CASE WHEN model_id = ?1 THEN 0 ELSE 1 END, created_at DESC, model_id ASC
+            LIMIT 1
+            ",
+            params![DEFAULT_MODEL_ID],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1).ok().map(|value| value as usize),
+                ))
+            },
+        )
+        .ok();
+
+    let (active_model_id, embedding_dim) =
+        active_model.unwrap_or_else(|| (DEFAULT_MODEL_ID.to_string(), None));
+
+    let mut statement = connection.prepare(
+        "
+        SELECT
+          chunk_id,
+          lower(COALESCE(type, '')),
+          COALESCE(ref, ''),
+          COALESCE(heading, ''),
+          text,
+          table_md
+        FROM chunks
+        ORDER BY chunk_id ASC
+        ",
+    )?;
+    let mut rows = statement.query([])?;
+
+    let mut eligible_chunks = 0usize;
+    let mut embedded_chunks = 0usize;
+    let mut stale_rows = 0usize;
+
+    while let Some(row) = rows.next()? {
+        let chunk_id = row.get::<_, String>(0)?;
+        let chunk_type = row.get::<_, String>(1)?;
+        let reference = row.get::<_, String>(2)?;
+        let heading = row.get::<_, String>(3)?;
+        let text = row.get::<_, Option<String>>(4)?;
+        let table_md = row.get::<_, Option<String>>(5)?;
+
+        let payload = chunk_payload_for_embedding(
+            &chunk_type,
+            &reference,
+            &heading,
+            text.as_deref(),
+            table_md.as_deref(),
+        );
+        let Some(payload) = payload else {
+            continue;
+        };
+
+        eligible_chunks += 1;
+        let expected_hash = embedding_text_hash(&payload);
+
+        let existing = connection
+            .query_row(
+                "
+                SELECT text_hash, embedding_dim
+                FROM chunk_embeddings
+                WHERE chunk_id = ?1 AND model_id = ?2
+                LIMIT 1
+                ",
+                params![chunk_id, active_model_id],
+                |existing_row| {
+                    Ok((
+                        existing_row.get::<_, String>(0)?,
+                        existing_row
+                            .get::<_, i64>(1)
+                            .ok()
+                            .map(|value| value as usize),
+                    ))
+                },
+            )
+            .ok();
+
+        match existing {
+            Some((actual_hash, actual_dim)) => {
+                embedded_chunks += 1;
+                let stale_hash = actual_hash != expected_hash;
+                let stale_dim = match (embedding_dim, actual_dim) {
+                    (Some(expected), Some(actual)) => expected != actual,
+                    _ => false,
+                };
+                if stale_hash || stale_dim {
+                    stale_rows += 1;
+                }
+            }
+            None => {
+                stale_rows += 1;
+            }
+        }
+    }
+
+    let embedding_rows_for_active_model: usize = connection.query_row(
+        "
+        SELECT COUNT(*)
+        FROM chunk_embeddings
+        WHERE model_id = ?1
+        ",
+        params![active_model_id],
+        |row| Ok(row.get::<_, i64>(0)? as usize),
+    )?;
+
+    Ok(SemanticEmbeddingMetrics {
+        active_model_id,
+        embedding_dim,
+        eligible_chunks,
+        embedded_chunks,
+        stale_rows,
+        embedding_rows_for_active_model,
+    })
+}

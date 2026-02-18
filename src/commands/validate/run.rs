@@ -274,6 +274,8 @@ pub fn run(args: ValidateArgs) -> Result<()> {
         hierarchy_semantics: wp2_assessment.hierarchy_semantics,
         table_semantics: wp2_assessment.table_semantics,
         citation_parity: wp2_assessment.citation_parity,
+        semantic_embeddings: wp2_assessment.semantic_embeddings,
+        semantic_quality: wp2_assessment.semantic_quality,
         checks,
         issues,
         recommendations,
@@ -289,4 +291,3 @@ pub fn run(args: ValidateArgs) -> Result<()> {
 
     Ok(())
 }
-

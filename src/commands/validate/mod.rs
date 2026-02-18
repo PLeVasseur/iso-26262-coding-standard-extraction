@@ -4,6 +4,7 @@ include!("run.rs");
 include!("stage_and_wp2_core.rs");
 include!("fidelity_metrics_part1.rs");
 include!("fidelity_metrics_part2.rs");
+include!("semantic_quality.rs");
 include!("citation_parity_part1.rs");
 include!("coverage_freshness_part1.rs");
 include!("coverage_freshness_part2.rs");

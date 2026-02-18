@@ -1,9 +1,69 @@
+fn collect_lexical_candidates(
+    connection: &Connection,
+    query_text: &str,
+    part_filter: Option<u32>,
+    chunk_type_filter: Option<&str>,
+    node_type_filter: Option<&str>,
+    candidate_limit: usize,
+) -> Result<Vec<QueryCandidate>> {
+    let mut dedup = HashMap::<String, QueryCandidate>::new();
+
+    for candidate in query_exact_matches(
+        connection,
+        query_text,
+        part_filter,
+        chunk_type_filter,
+        node_type_filter,
+        candidate_limit,
+    )? {
+        upsert_candidate(&mut dedup, candidate);
+    }
+
+    for candidate in query_fts_matches(
+        connection,
+        query_text,
+        part_filter,
+        chunk_type_filter,
+        node_type_filter,
+        candidate_limit,
+    )? {
+        upsert_candidate(&mut dedup, candidate);
+    }
+
+    if node_type_filter.is_some() {
+        for candidate in query_node_matches(
+            connection,
+            query_text,
+            part_filter,
+            chunk_type_filter,
+            node_type_filter,
+            candidate_limit,
+        )? {
+            upsert_candidate(&mut dedup, candidate);
+        }
+    }
+
+    let mut candidates = dedup.into_values().collect::<Vec<QueryCandidate>>();
+    sort_candidates(&mut candidates);
+    if candidates.len() > candidate_limit {
+        candidates.truncate(candidate_limit);
+    }
+
+    for (index, candidate) in candidates.iter_mut().enumerate() {
+        candidate.lexical_rank = Some(index + 1);
+        candidate.lexical_score = Some(candidate.score);
+    }
+
+    Ok(candidates)
+}
+
 fn query_exact_matches(
     connection: &Connection,
     query_text: &str,
     part_filter: Option<u32>,
     chunk_type_filter: Option<&str>,
     node_type_filter: Option<&str>,
+    candidate_limit: usize,
 ) -> Result<Vec<QueryCandidate>> {
     let mut statement = connection.prepare(
         "
@@ -48,7 +108,7 @@ fn query_exact_matches(
         part_filter.map(i64::from),
         chunk_type_filter,
         node_type_filter,
-        MAX_QUERY_CANDIDATES,
+        candidate_limit as i64,
     ])?;
 
     let mut out = Vec::new();
@@ -73,7 +133,13 @@ fn query_exact_matches(
 
         out.push(QueryCandidate {
             score,
-            match_kind,
+            match_kind: match_kind.to_string(),
+            source_tags: vec!["lexical_exact".to_string()],
+            lexical_rank: None,
+            semantic_rank: None,
+            lexical_score: Some(score),
+            semantic_score: None,
+            rrf_score: None,
             chunk_id: row.get(0)?,
             doc_id: row.get(1)?,
             part: row.get::<_, u32>(2)?,
@@ -105,6 +171,7 @@ fn query_fts_matches(
     part_filter: Option<u32>,
     chunk_type_filter: Option<&str>,
     node_type_filter: Option<&str>,
+    candidate_limit: usize,
 ) -> Result<Vec<QueryCandidate>> {
     let fts_query = to_fts_query(query_text);
 
@@ -122,7 +189,6 @@ fn query_fts_matches(
           c.page_pdf_end,
           COALESCE(c.source_hash, ''),
           snippet(chunks_fts, 4, '[', ']', ' ... ', 18),
-          bm25(chunks_fts),
           c.origin_node_id,
           c.leaf_node_type,
           c.ancestor_path,
@@ -149,17 +215,23 @@ fn query_fts_matches(
         part_filter.map(i64::from),
         chunk_type_filter,
         node_type_filter,
-        MAX_QUERY_CANDIDATES,
+        candidate_limit as i64,
     ])?;
 
     let mut out = Vec::new();
     let mut index = 0usize;
 
     while let Some(row) = rows.next()? {
-        let snippet: String = row.get(10)?;
+        let score = 500.0 - (index as f64);
         out.push(QueryCandidate {
-            score: 500.0 - (index as f64),
-            match_kind: "fts",
+            score,
+            match_kind: "fts".to_string(),
+            source_tags: vec!["lexical_fts".to_string()],
+            lexical_rank: None,
+            semantic_rank: None,
+            lexical_score: Some(score),
+            semantic_score: None,
+            rrf_score: None,
             chunk_id: row.get(0)?,
             doc_id: row.get(1)?,
             part: row.get::<_, u32>(2)?,
@@ -170,15 +242,15 @@ fn query_fts_matches(
             page_pdf_start: row.get(7)?,
             page_pdf_end: row.get(8)?,
             source_hash: row.get(9)?,
-            snippet,
-            origin_node_id: row.get(12)?,
-            leaf_node_type: row.get(13)?,
-            ancestor_path: row.get(14)?,
-            anchor_type: row.get(15)?,
-            anchor_label_raw: row.get(16)?,
-            anchor_label_norm: row.get(17)?,
-            anchor_order: row.get(18)?,
-            citation_anchor_id: row.get(19)?,
+            snippet: row.get(10)?,
+            origin_node_id: row.get(11)?,
+            leaf_node_type: row.get(12)?,
+            ancestor_path: row.get(13)?,
+            anchor_type: row.get(14)?,
+            anchor_label_raw: row.get(15)?,
+            anchor_label_norm: row.get(16)?,
+            anchor_order: row.get(17)?,
+            citation_anchor_id: row.get(18)?,
         });
         index += 1;
     }
@@ -192,6 +264,7 @@ fn query_node_matches(
     part_filter: Option<u32>,
     chunk_type_filter: Option<&str>,
     node_type_filter: Option<&str>,
+    candidate_limit: usize,
 ) -> Result<Vec<QueryCandidate>> {
     let mut statement = connection.prepare(
         "
@@ -235,7 +308,7 @@ fn query_node_matches(
         part_filter.map(i64::from),
         chunk_type_filter,
         node_type_filter,
-        MAX_QUERY_CANDIDATES,
+        candidate_limit as i64,
     ])?;
 
     let query_lower = query_text.to_lowercase();
@@ -268,7 +341,13 @@ fn query_node_matches(
 
         out.push(QueryCandidate {
             score,
-            match_kind,
+            match_kind: match_kind.to_string(),
+            source_tags: vec!["lexical_node".to_string()],
+            lexical_rank: None,
+            semantic_rank: None,
+            lexical_score: Some(score),
+            semantic_score: None,
+            rrf_score: None,
             chunk_id: format!("node::{node_id}"),
             doc_id: row.get(1)?,
             part: row.get::<_, u32>(2)?,
@@ -293,4 +372,3 @@ fn query_node_matches(
 
     Ok(out)
 }
-

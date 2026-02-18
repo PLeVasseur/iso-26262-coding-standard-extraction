@@ -17,7 +17,7 @@ use crate::model::{
 };
 use crate::util::{ensure_directory, now_utc_string, utc_compact_string, write_json_pretty};
 
-const DB_SCHEMA_VERSION: &str = "0.3.0";
+const DB_SCHEMA_VERSION: &str = "0.4.0";
 
 pub fn run(args: IngestArgs) -> Result<()> {
     let started_ts = Utc::now();
@@ -200,4 +200,3 @@ fn load_or_refresh_inventory(
 
     Ok(manifest)
 }
-

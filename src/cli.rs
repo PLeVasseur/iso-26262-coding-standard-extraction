@@ -17,6 +17,7 @@ pub struct Cli {
 pub enum Commands {
     Inventory(InventoryArgs),
     Ingest(IngestArgs),
+    Embed(EmbedArgs),
     Query(QueryArgs),
     Status(StatusArgs),
     Validate(ValidateArgs),
@@ -87,6 +88,45 @@ impl OcrMode {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum EmbedRefreshMode {
+    Full,
+    MissingOrStale,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct EmbedArgs {
+    #[arg(long, default_value = ".cache/iso26262")]
+    pub cache_root: PathBuf,
+
+    #[arg(long)]
+    pub db_path: Option<PathBuf>,
+
+    #[arg(long, default_value = "miniLM-L6-v2-local-v1")]
+    pub model_id: String,
+
+    #[arg(long, value_enum, default_value_t = EmbedRefreshMode::MissingOrStale)]
+    pub refresh_mode: EmbedRefreshMode,
+
+    #[arg(long, default_value_t = 64)]
+    pub batch_size: usize,
+
+    #[arg(long = "chunk-type")]
+    pub chunk_types: Vec<String>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum RetrievalMode {
+    Lexical,
+    Semantic,
+    Hybrid,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum FusionMode {
+    Rrf,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct StatusArgs {
     #[arg(long, default_value = ".cache/iso26262")]
@@ -103,6 +143,27 @@ pub struct QueryArgs {
 
     #[arg(long)]
     pub query: String,
+
+    #[arg(long, value_enum, default_value_t = RetrievalMode::Lexical)]
+    pub retrieval_mode: RetrievalMode,
+
+    #[arg(long, default_value_t = 96)]
+    pub lexical_k: usize,
+
+    #[arg(long, default_value_t = 96)]
+    pub semantic_k: usize,
+
+    #[arg(long, value_enum, default_value_t = FusionMode::Rrf)]
+    pub fusion: FusionMode,
+
+    #[arg(long, default_value_t = 60)]
+    pub rrf_k: u32,
+
+    #[arg(long)]
+    pub semantic_model_id: Option<String>,
+
+    #[arg(long, default_value_t = false)]
+    pub allow_lexical_fallback: bool,
 
     #[arg(long, default_value_t = 10)]
     pub limit: usize,

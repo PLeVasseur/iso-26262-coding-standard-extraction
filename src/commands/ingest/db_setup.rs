@@ -133,6 +133,8 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
         ",
     )?;
 
+    ensure_embedding_schema(connection)?;
+
     let now = now_utc_string();
     connection.execute(
         "INSERT INTO metadata(key, value) VALUES('db_schema_version', ?1)
@@ -143,6 +145,40 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
         "INSERT INTO metadata(key, value) VALUES('db_updated_at', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         [now],
+    )?;
+
+    Ok(())
+}
+
+pub(crate) fn ensure_embedding_schema(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS embedding_models (
+          model_id TEXT PRIMARY KEY,
+          backend TEXT NOT NULL,
+          model_name TEXT NOT NULL,
+          dimensions INTEGER NOT NULL,
+          normalize INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          config_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chunk_embeddings (
+          chunk_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          embedding BLOB NOT NULL,
+          embedding_dim INTEGER NOT NULL,
+          text_hash TEXT NOT NULL,
+          generated_at TEXT NOT NULL,
+          PRIMARY KEY (chunk_id, model_id),
+          FOREIGN KEY (chunk_id) REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+          FOREIGN KEY (model_id) REFERENCES embedding_models(model_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model ON chunk_embeddings(model_id);
+        CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_chunk ON chunk_embeddings(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model_hash ON chunk_embeddings(model_id, text_hash);
+        ",
     )?;
 
     Ok(())
@@ -213,4 +249,3 @@ fn upsert_docs(connection: &mut Connection, inventory: &PdfInventoryManifest) ->
     tx.commit()?;
     Ok(inventory.pdfs.len())
 }
-

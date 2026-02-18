@@ -4,14 +4,15 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::cli::ValidateArgs;
+use crate::semantic::{chunk_payload_for_embedding, embedding_text_hash, DEFAULT_MODEL_ID};
 use crate::util::{now_utc_string, write_json_pretty};
 
-const DB_SCHEMA_VERSION: &str = "0.3.0";
+const DB_SCHEMA_VERSION: &str = "0.4.0";
 const TABLE_SPARSE_ROW_RATIO_MAX: f64 = 0.20;
 const TABLE_OVERLOADED_ROW_RATIO_MAX: f64 = 0.10;
 const TABLE_MARKER_SEQUENCE_COVERAGE_MIN: f64 = 0.90;
@@ -162,6 +163,8 @@ struct QualityReport {
     hierarchy_semantics: HierarchySemanticsReport,
     table_semantics: TableSemanticsReport,
     citation_parity: CitationParitySummaryReport,
+    semantic_embeddings: SemanticEmbeddingReport,
+    semantic_quality: SemanticQualitySummaryReport,
     checks: Vec<QualityCheck>,
     issues: Vec<String>,
     recommendations: Vec<String>,
@@ -495,4 +498,3 @@ struct CitationParityEntry {
     reference: String,
     top_results: Vec<CitationParityIdentity>,
 }
-

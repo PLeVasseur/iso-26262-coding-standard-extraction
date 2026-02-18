@@ -4,7 +4,6 @@ fn resolve_wp2_gate_stage() -> Wp2GateStage {
         _ => Wp2GateStage::A,
     }
 }
-
 fn resolve_citation_baseline_mode() -> CitationBaselineMode {
     parse_citation_baseline_mode(
         std::env::var(WP2_CITATION_BASELINE_MODE_ENV)
@@ -12,7 +11,6 @@ fn resolve_citation_baseline_mode() -> CitationBaselineMode {
             .as_deref(),
     )
 }
-
 fn resolve_citation_baseline_path() -> PathBuf {
     parse_citation_baseline_path(
         std::env::var(WP2_CITATION_BASELINE_PATH_ENV)
@@ -20,7 +18,6 @@ fn resolve_citation_baseline_path() -> PathBuf {
             .as_deref(),
     )
 }
-
 fn parse_citation_baseline_mode(value: Option<&str>) -> CitationBaselineMode {
     match value {
         Some(value)
@@ -70,6 +67,7 @@ fn build_wp2_assessment(
         baseline_mode: citation_baseline_mode.as_str().to_string(),
         ..CitationParitySummaryReport::default()
     };
+    let mut semantic_embeddings = SemanticEmbeddingReport::default();
 
     let latest_counts = latest_snapshot
         .map(|snapshot| snapshot.snapshot.counts.clone())
@@ -87,7 +85,8 @@ fn build_wp2_assessment(
         load_page_provenance_entries(manifest_dir, previous_snapshot).unwrap_or_default();
 
     extraction.provenance_entries = current_page_provenance.len();
-    extraction.provenance_coverage = ratio(extraction.provenance_entries, extraction.processed_pages);
+    extraction.provenance_coverage =
+        ratio(extraction.provenance_entries, extraction.processed_pages);
     extraction.unknown_backend_pages = current_page_provenance
         .iter()
         .filter(|entry| !matches!(entry.backend.as_str(), "text_layer" | "ocr"))
@@ -104,13 +103,16 @@ fn build_wp2_assessment(
     let printed_metrics = compute_printed_page_metrics(connection, &current_page_provenance)?;
     extraction.total_chunks = printed_metrics.total_chunks;
     extraction.printed_mapped_chunks = printed_metrics.mapped_chunks;
-    extraction.printed_mapping_coverage = ratio(printed_metrics.mapped_chunks, printed_metrics.total_chunks);
+    extraction.printed_mapping_coverage =
+        ratio(printed_metrics.mapped_chunks, printed_metrics.total_chunks);
     extraction.printed_status_coverage = ratio(
         printed_metrics.pages_with_explicit_status,
         printed_metrics.total_pages,
     );
-    extraction.printed_detectability_rate =
-        ratio(printed_metrics.detectable_pages, printed_metrics.total_pages);
+    extraction.printed_detectability_rate = ratio(
+        printed_metrics.detectable_pages,
+        printed_metrics.total_pages,
+    );
     extraction.printed_mapping_on_detectable = ratio(
         printed_metrics.mapped_detectable_chunks,
         printed_metrics.detectable_chunks,
@@ -154,8 +156,10 @@ fn build_wp2_assessment(
     let list_semantics = compute_list_semantics_metrics(connection, &latest_counts)?;
     hierarchy.list_items_total = list_semantics.list_items_total;
     hierarchy.list_semantics_complete = list_semantics.list_semantics_complete;
-    hierarchy.list_semantics_completeness =
-        ratio(list_semantics.list_semantics_complete, list_semantics.list_items_total);
+    hierarchy.list_semantics_completeness = ratio(
+        list_semantics.list_semantics_complete,
+        list_semantics.list_items_total,
+    );
     hierarchy.nested_parent_depth_violations = list_semantics.parent_depth_violations;
     hierarchy.list_parse_candidate_total = list_semantics.list_parse_candidate_total;
     hierarchy.list_parse_fallback_total = list_semantics.list_parse_fallback_total;
@@ -172,8 +176,10 @@ fn build_wp2_assessment(
         table_metrics.table_cells_total,
     );
     table_semantics.invalid_span_count = table_metrics.invalid_span_count;
-    table_semantics.header_flag_completeness =
-        ratio(table_metrics.header_cells_flagged, table_metrics.header_cells_total);
+    table_semantics.header_flag_completeness = ratio(
+        table_metrics.header_cells_flagged,
+        table_metrics.header_cells_total,
+    );
     table_semantics.one_cell_row_ratio =
         ratio(table_metrics.one_cell_rows, table_metrics.total_table_rows);
     table_semantics.asil_one_cell_row_ratio = ratio(
@@ -209,6 +215,23 @@ fn build_wp2_assessment(
     citation_parity.top3_containment = parity_artifacts.top3_containment;
     citation_parity.page_range_parity = parity_artifacts.page_range_parity;
 
+    let semantic_metrics = compute_semantic_embedding_metrics(connection)?;
+    semantic_embeddings.active_model_id = semantic_metrics.active_model_id.clone();
+    semantic_embeddings.embedding_dim = semantic_metrics.embedding_dim;
+    semantic_embeddings.eligible_chunks = semantic_metrics.eligible_chunks;
+    semantic_embeddings.embedded_chunks = semantic_metrics.embedded_chunks;
+    semantic_embeddings.stale_rows = semantic_metrics.stale_rows;
+    semantic_embeddings.embedding_rows_for_active_model =
+        semantic_metrics.embedding_rows_for_active_model;
+    semantic_embeddings.chunk_embedding_coverage_ratio = ratio(
+        semantic_metrics.embedded_chunks,
+        semantic_metrics.eligible_chunks,
+    );
+    semantic_embeddings.stale_embedding_ratio = ratio(
+        semantic_metrics.stale_rows,
+        semantic_metrics.eligible_chunks,
+    );
+
     let q023_hard_fail = extraction
         .provenance_coverage
         .map(|coverage| coverage < WP2_EXTRACTION_PROVENANCE_COVERAGE_MIN)
@@ -229,8 +252,8 @@ fn build_wp2_assessment(
         result: wp2_result(stage, q023_hard_fail, q023_stage_b_fail).to_string(),
     });
 
-    let q024_hard_fail = extraction.invalid_printed_label_count > 0
-        || extraction.invalid_printed_range_count > 0;
+    let q024_hard_fail =
+        extraction.invalid_printed_label_count > 0 || extraction.invalid_printed_range_count > 0;
     let q024_stage_b_fail = extraction
         .printed_status_coverage
         .map(|coverage| coverage < 1.0)
@@ -451,13 +474,27 @@ fn build_wp2_assessment(
         }
     }
 
+    let semantic_assessment = build_semantic_quality_assessment(
+        connection,
+        manifest_dir,
+        run_id,
+        refs,
+        stage,
+        &semantic_metrics,
+        &mut semantic_embeddings,
+    )?;
+    checks.extend(semantic_assessment.checks);
+    recommendations.extend(semantic_assessment.recommendations);
+    let semantic_quality = semantic_assessment.summary;
+
     Ok(Wp2Assessment {
         checks,
         extraction_fidelity: extraction,
         hierarchy_semantics: hierarchy,
         table_semantics,
         citation_parity,
+        semantic_embeddings,
+        semantic_quality,
         recommendations,
     })
 }
-

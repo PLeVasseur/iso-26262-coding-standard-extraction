@@ -1,3 +1,4 @@
+pub mod embed;
 pub mod ingest;
 pub mod inventory;
 pub mod query;

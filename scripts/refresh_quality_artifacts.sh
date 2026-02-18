@@ -7,12 +7,13 @@ MAX_PAGES="${MAX_PAGES:-60}"
 FULL_TARGET_SET="${FULL_TARGET_SET:-0}"
 TARGET_PARTS="${TARGET_PARTS:-2 6 8 9}"
 FULL_MAX_PAGES="${FULL_MAX_PAGES:-0}"
+SEMANTIC_MODEL_ID="${SEMANTIC_MODEL_ID:-miniLM-L6-v2-local-v1}"
 PHASE_ID="${PHASE_ID:-phase-8}"
 PHASE_NAME="${PHASE_NAME:-Phase 8 - Deterministic runbook and crash recovery}"
 BASE_BRANCH="${BASE_BRANCH:-main}"
 UPDATE_DECISIONS="${UPDATE_DECISIONS:-1}"
 RUNBOOK_VERSION="${RUNBOOK_VERSION:-1.0}"
-EXPECTED_DB_SCHEMA_VERSION="${EXPECTED_DB_SCHEMA_VERSION:-0.3.0}"
+EXPECTED_DB_SCHEMA_VERSION="${EXPECTED_DB_SCHEMA_VERSION:-0.4.0}"
 REBUILD_ON_COMPAT_MISMATCH="${REBUILD_ON_COMPAT_MISMATCH:-0}"
 ALLOW_BLOCKED_RESUME="${ALLOW_BLOCKED_RESUME:-0}"
 
@@ -132,6 +133,7 @@ if should_run_step "R06-VALIDATE"; then
   write_running_state "$CURRENT_STEP" "$NEXT_PLANNED_COMMAND"
   cargo run -- query --cache-root "$CACHE_ROOT" --query "9.1" --part "$PART" --with-ancestors --with-descendants --json --limit 3 >/dev/null
   cargo run -- query --cache-root "$CACHE_ROOT" --query "Table 3" --part "$PART" --with-ancestors --with-descendants --json --limit 1 >/dev/null
+  cargo run -- embed --cache-root "$CACHE_ROOT" --model-id "$SEMANTIC_MODEL_ID" --refresh-mode missing-or-stale --batch-size 64
   cargo run -- validate --cache-root "$CACHE_ROOT"
 
   if [[ ! -f "$REPORT_PATH" ]]; then
