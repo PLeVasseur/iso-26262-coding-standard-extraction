@@ -14,6 +14,7 @@ scripts/smoke_part6.sh
 - `PART` (default `6`)
 - `MAX_PAGES` (default `60`)
 - `SEMANTIC_MODEL_ID` (default `miniLM-L6-v2-local-v1`) for smoke embed refresh
+- `EMBED_LOCKFILE_PATH` optional override for semantic model lockfile output
 - `SMOKE_DETERMINISM=1` to rerun validate and assert stable report/query outputs
 - `SMOKE_IDEMPOTENCE=1` to run a second ingest and compare selected counters
 
@@ -212,6 +213,7 @@ Optional environment overrides:
 - `TARGET_PARTS` (default `2 6 8 9`) used when `FULL_TARGET_SET=1`
 - `FULL_MAX_PAGES` (default `0`) optional page cap for full-target mode (`0` means no cap)
 - `SEMANTIC_MODEL_ID` (default `miniLM-L6-v2-local-v1`) for embed refresh before validate
+- `EMBED_LOCKFILE_PATH` optional override for semantic model lockfile output
 - `PHASE_ID` (default `phase-8`)
 - `PHASE_NAME` (default `Phase 8 - Deterministic runbook and crash recovery`)
 - `BASE_BRANCH` (default `main`)
@@ -228,6 +230,67 @@ Optional environment overrides:
 - `WP3_SEMANTIC_BASELINE_PATH` to override lockfile location (default `manifests/semantic_retrieval_baseline.lock.json`)
 - `WP3_SEMANTIC_BASELINE_DECISION_ID` required for lockfile rotation in bootstrap mode
 - `WP3_SEMANTIC_BASELINE_REASON` required for lockfile rotation in bootstrap mode
+
+## Regression Before/After Drift Gate
+
+Use this workflow to capture deterministic `before`/`after` evidence and compare lexical, semantic, and performance drift without a second git worktree.
+
+Artifacts are written under:
+
+```bash
+.cache/iso26262/regression/<run_id>/
+```
+
+with `before/`, `after/`, and `compare/` folders.
+
+### Capture snapshots
+
+Use `full` mode for large refactor phases (recommended default):
+
+```bash
+scripts/regression_capture.sh --run-id refactor-001 --phase before --mode full
+# apply refactor changes
+scripts/regression_capture.sh --run-id refactor-001 --phase after --mode full
+```
+
+Use `lite` mode for faster intermediate checkpoints:
+
+```bash
+scripts/regression_capture.sh --run-id refactor-001 --phase after --mode lite
+```
+
+### Compare drift and gate status
+
+```bash
+scripts/regression_compare.sh --run-id refactor-001 --mode full
+```
+
+Outputs:
+
+- `compare/drift_report.json`
+- `compare/drift_report.md`
+- `compare/gate_status.txt`
+
+Exit codes:
+
+- `0` = `PASS`
+- `10` = `WARN`
+- `20` = `FAIL`
+
+### Convenience wrapper
+
+```bash
+scripts/regression_gate.sh before --run-id refactor-001 --mode full
+scripts/regression_gate.sh after --run-id refactor-001 --mode full
+scripts/regression_gate.sh compare --run-id refactor-001 --mode full
+```
+
+### Common regression options
+
+- `--source-cache-root` (default `.cache/iso26262`)
+- `--output-root` (default `.cache/iso26262/regression`)
+- `--force` to overwrite an existing `before`/`after` phase capture
+- `--thresholds` for compare (default `scripts/lib/regression/thresholds.json`)
 
 ### New-session bootstrap
 
