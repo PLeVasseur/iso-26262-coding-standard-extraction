@@ -1,23 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
-use anyhow::{bail, Context, Result};
-use chrono::Utc;
-use regex::Regex;
-use rusqlite::{params, Connection};
-use serde::Serialize;
-use tracing::{info, warn};
-
-use crate::cli::{IngestArgs, OcrMode};
-use crate::commands::inventory;
-use crate::model::{
-    IngestCounts, IngestPaths, IngestRunManifest, PdfEntry, PdfInventoryManifest, ToolVersions,
-};
-use crate::util::{ensure_directory, now_utc_string, utc_compact_string, write_json_pretty};
-
-const DB_SCHEMA_VERSION: &str = "0.4.0";
+use super::*;
 
 pub fn run(args: IngestArgs) -> Result<()> {
     let started_ts = Utc::now();
@@ -171,7 +152,7 @@ pub fn run(args: IngestArgs) -> Result<()> {
     Ok(())
 }
 
-fn load_or_refresh_inventory(
+pub fn load_or_refresh_inventory(
     cache_root: &Path,
     inventory_manifest_path: &Path,
     refresh_inventory: bool,

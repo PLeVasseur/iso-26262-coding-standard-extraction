@@ -1,4 +1,6 @@
-fn increment_node_type_stat(stats: &mut ChunkInsertStats, node_type: NodeType) {
+use super::*;
+
+pub fn increment_node_type_stat(stats: &mut ChunkInsertStats, node_type: NodeType) {
     match node_type {
         NodeType::SectionHeading => {}
         NodeType::Clause => stats.clause_nodes_inserted += 1,
@@ -17,7 +19,7 @@ fn increment_node_type_stat(stats: &mut ChunkInsertStats, node_type: NodeType) {
     }
 }
 
-fn chunk_origin_node_type(chunk_type: ChunkType, reference: &str) -> NodeType {
+pub fn chunk_origin_node_type(chunk_type: ChunkType, reference: &str) -> NodeType {
     match chunk_type {
         ChunkType::Clause => {
             let depth = reference.split('.').count();
@@ -32,7 +34,7 @@ fn chunk_origin_node_type(chunk_type: ChunkType, reference: &str) -> NodeType {
     }
 }
 
-fn find_parent_clause_node_id(
+pub fn find_parent_clause_node_id(
     reference: &str,
     clause_ref_to_node_id: &HashMap<String, String>,
 ) -> Option<String> {
@@ -48,7 +50,7 @@ fn find_parent_clause_node_id(
     None
 }
 
-fn find_section_node_id(
+pub fn find_section_node_id(
     reference: &str,
     section_ref_to_node_id: &HashMap<String, String>,
 ) -> Option<String> {
@@ -60,7 +62,7 @@ fn find_section_node_id(
     section_ref_to_node_id.get(section_ref).cloned()
 }
 
-fn build_ancestor_path(
+pub fn build_ancestor_path(
     parent_node_id: Option<&str>,
     node_paths: &HashMap<String, String>,
     node_type: NodeType,
@@ -83,7 +85,7 @@ fn build_ancestor_path(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_node(
+pub fn insert_node(
     statement: &mut rusqlite::Statement<'_>,
     node_id: &str,
     parent_node_id: Option<&str>,
@@ -146,7 +148,7 @@ fn insert_node(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_table_child_nodes(
+pub fn insert_table_child_nodes(
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,
     table_node_id: &str,

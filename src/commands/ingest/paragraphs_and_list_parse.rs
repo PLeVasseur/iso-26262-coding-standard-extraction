@@ -1,4 +1,6 @@
-fn parse_paragraphs(
+use super::*;
+
+pub fn parse_paragraphs(
     text: &str,
     heading: &str,
     list_item_regex: &Regex,
@@ -54,7 +56,7 @@ fn parse_paragraphs(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_paragraph_nodes(
+pub fn insert_paragraph_nodes(
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,
     parent_node_id: &str,
@@ -121,7 +123,7 @@ fn insert_paragraph_nodes(
     Ok(())
 }
 
-fn parse_list_items(
+pub fn parse_list_items(
     text: &str,
     heading: &str,
     list_item_regex: &Regex,
@@ -213,7 +215,7 @@ fn parse_list_items(
     (items, used_fallback, had_list_candidates)
 }
 
-fn parse_note_items(
+pub fn parse_note_items(
     text: &str,
     heading: &str,
     note_item_regex: &Regex,
@@ -284,7 +286,7 @@ fn parse_note_items(
     items
 }
 
-fn reorder_list_items_for_marker_sequence(items: &mut Vec<ListItemDraft>) {
+pub fn reorder_list_items_for_marker_sequence(items: &mut Vec<ListItemDraft>) {
     if items.len() < 3 {
         return;
     }
@@ -313,7 +315,7 @@ fn reorder_list_items_for_marker_sequence(items: &mut Vec<ListItemDraft>) {
     }
 }
 
-fn infer_list_depth(raw_line: &str) -> i64 {
+pub fn infer_list_depth(raw_line: &str) -> i64 {
     let indent_units = raw_line
         .chars()
         .take_while(|ch| ch.is_whitespace())
@@ -324,7 +326,7 @@ fn infer_list_depth(raw_line: &str) -> i64 {
     (normalized as i64) + 1
 }
 
-fn classify_list_marker_style(marker_norm: &str) -> &'static str {
+pub fn classify_list_marker_style(marker_norm: &str) -> &'static str {
     if marker_norm == "-" {
         return "bullet";
     }
@@ -348,7 +350,7 @@ fn classify_list_marker_style(marker_norm: &str) -> &'static str {
     "symbol"
 }
 
-fn infer_depth_from_marker_transition(
+pub fn infer_depth_from_marker_transition(
     previous: &ListItemDraft,
     marker_style: &str,
     fallback_depth: i64,
@@ -361,14 +363,14 @@ fn infer_depth_from_marker_transition(
     }
 }
 
-fn is_roman_marker(value: &str) -> bool {
+pub fn is_roman_marker(value: &str) -> bool {
     value.len() >= 2
         && value
             .chars()
             .all(|ch| matches!(ch, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
 }
 
-fn parse_numeric_alpha_marker(value: &str) -> Option<(i64, Option<char>)> {
+pub fn parse_numeric_alpha_marker(value: &str) -> Option<(i64, Option<char>)> {
     let mut digits = String::new();
     let mut suffix: Option<char> = None;
 

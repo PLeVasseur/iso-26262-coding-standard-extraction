@@ -1,15 +1,17 @@
-fn derive_ref_path(reference: &str, chunk_type: ChunkType) -> String {
+use super::*;
+
+pub fn derive_ref_path(reference: &str, chunk_type: ChunkType) -> String {
     match chunk_type {
         ChunkType::Clause => reference.split('.').collect::<Vec<&str>>().join(" > "),
         ChunkType::Table | ChunkType::Annex => reference.to_string(),
     }
 }
 
-fn normalize_line(input: &str) -> &str {
+pub fn normalize_line(input: &str) -> &str {
     input.trim()
 }
 
-fn sanitize_ref_for_id(reference: &str) -> String {
+pub fn sanitize_ref_for_id(reference: &str) -> String {
     let mut out = String::with_capacity(reference.len());
     for ch in reference.chars() {
         if ch.is_ascii_alphanumeric() {
@@ -26,7 +28,7 @@ fn sanitize_ref_for_id(reference: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
-fn normalize_marker_label(marker: &str) -> String {
+pub fn normalize_marker_label(marker: &str) -> String {
     let trimmed = marker.trim();
     if trimmed.is_empty() {
         return "-".to_string();
@@ -53,7 +55,7 @@ fn normalize_marker_label(marker: &str) -> String {
     canonical_bullet.to_ascii_lowercase()
 }
 
-fn build_citation_anchor_id(
+pub fn build_citation_anchor_id(
     doc_id: &str,
     parent_ref: &str,
     anchor_type: &str,
@@ -76,7 +78,7 @@ fn build_citation_anchor_id(
     )
 }
 
-fn extract_section_headings_with_pdftohtml(pdf_path: &Path) -> Result<Vec<SectionHeadingDraft>> {
+pub fn extract_section_headings_with_pdftohtml(pdf_path: &Path) -> Result<Vec<SectionHeadingDraft>> {
     let output = Command::new("pdftohtml")
         .arg("-xml")
         .arg("-f")
@@ -145,7 +147,7 @@ fn extract_section_headings_with_pdftohtml(pdf_path: &Path) -> Result<Vec<Sectio
     Ok(section_headings)
 }
 
-fn normalize_outline_label(raw_label: &str) -> String {
+pub fn normalize_outline_label(raw_label: &str) -> String {
     raw_label
         .replace("&amp;", "&")
         .replace("&lt;", "<")

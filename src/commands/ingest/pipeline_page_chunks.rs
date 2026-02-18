@@ -1,5 +1,7 @@
+use super::*;
+
 #[allow(clippy::too_many_arguments)]
-fn seed_page_chunks_for_pdf(
+pub fn seed_page_chunks_for_pdf(
     chunk_statement: &mut rusqlite::Statement<'_>,
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,

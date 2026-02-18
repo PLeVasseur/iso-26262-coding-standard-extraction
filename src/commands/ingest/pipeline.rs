@@ -1,13 +1,15 @@
-struct IngestRegexes {
-    list_item_regex: Regex,
-    note_item_regex: Regex,
-    table_cell_split_regex: Regex,
-    requirement_split_regex: Regex,
-    requirement_keyword_regex: Regex,
+use super::*;
+
+pub struct IngestRegexes {
+    pub list_item_regex: Regex,
+    pub note_item_regex: Regex,
+    pub table_cell_split_regex: Regex,
+    pub requirement_split_regex: Regex,
+    pub requirement_keyword_regex: Regex,
 }
 
 impl IngestRegexes {
-    fn build() -> Result<Self> {
+    pub fn build() -> Result<Self> {
         Ok(Self {
             list_item_regex: Regex::new(
                 r"^(?P<marker>(?:(?:\d+[A-Za-z]?|[A-Za-z])(?:[\.)])?|[-*•—–]))(?:\s+(?P<body>.+))?$",
@@ -26,17 +28,17 @@ impl IngestRegexes {
 }
 
 #[derive(Debug)]
-struct PdfNodeState {
-    document_node_id: String,
-    node_paths: HashMap<String, String>,
-    section_ref_to_node_id: HashMap<String, String>,
-    clause_ref_to_node_id: HashMap<String, String>,
-    last_clause_node_id: Option<String>,
-    node_order_index: i64,
+pub struct PdfNodeState {
+    pub document_node_id: String,
+    pub node_paths: HashMap<String, String>,
+    pub section_ref_to_node_id: HashMap<String, String>,
+    pub clause_ref_to_node_id: HashMap<String, String>,
+    pub last_clause_node_id: Option<String>,
+    pub node_order_index: i64,
 }
 
 impl PdfNodeState {
-    fn new(document_node_id: String, document_path: String) -> Self {
+    pub fn new(document_node_id: String, document_path: String) -> Self {
         let mut node_paths = HashMap::<String, String>::new();
         node_paths.insert(document_node_id.clone(), document_path);
 
@@ -51,7 +53,7 @@ impl PdfNodeState {
     }
 }
 
-fn insert_chunks(
+pub fn insert_chunks(
     connection: &mut Connection,
     cache_root: &Path,
     pdfs: &[PdfEntry],
@@ -233,7 +235,7 @@ fn insert_chunks(
     Ok(stats)
 }
 
-fn track_processed_part(stats: &mut ChunkInsertStats, part: u32) {
+pub fn track_processed_part(stats: &mut ChunkInsertStats, part: u32) {
     stats.processed_pdf_count += 1;
     if !stats.processed_parts.contains(&part) {
         stats.processed_parts.push(part);
@@ -241,7 +243,7 @@ fn track_processed_part(stats: &mut ChunkInsertStats, part: u32) {
     }
 }
 
-fn accumulate_page_extraction_stats(stats: &mut ChunkInsertStats, extraction: &ExtractedPages) {
+pub fn accumulate_page_extraction_stats(stats: &mut ChunkInsertStats, extraction: &ExtractedPages) {
     stats.ocr_page_count += extraction.ocr_page_count;
     stats.text_layer_page_count += extraction.text_layer_page_count;
     stats.ocr_fallback_page_count += extraction.ocr_fallback_page_count;
@@ -256,7 +258,7 @@ fn accumulate_page_extraction_stats(stats: &mut ChunkInsertStats, extraction: &E
 }
 
 #[allow(clippy::too_many_arguments)]
-fn extract_pages_for_pdf(
+pub fn extract_pages_for_pdf(
     pdf_path: &Path,
     doc_id: &str,
     max_pages_per_doc: Option<usize>,
@@ -288,7 +290,7 @@ fn extract_pages_for_pdf(
     }
 }
 
-fn extract_section_headings_for_pdf(
+pub fn extract_section_headings_for_pdf(
     pdf_path: &Path,
     stats: &mut ChunkInsertStats,
 ) -> Vec<SectionHeadingDraft> {
@@ -306,7 +308,7 @@ fn extract_section_headings_for_pdf(
     }
 }
 
-fn initialize_document_node_state(
+pub fn initialize_document_node_state(
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,
     part: u32,

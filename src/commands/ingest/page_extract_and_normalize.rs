@@ -1,4 +1,6 @@
-fn extract_pages_with_backend(
+use super::*;
+
+pub fn extract_pages_with_backend(
     pdf_path: &Path,
     doc_id: &str,
     max_pages_per_doc: Option<usize>,
@@ -152,7 +154,7 @@ fn extract_pages_with_backend(
     Ok(extraction)
 }
 
-fn apply_page_normalization(extraction: &mut ExtractedPages) {
+pub fn apply_page_normalization(extraction: &mut ExtractedPages) {
     let header_candidates = detect_repeated_edge_lines(&extraction.pages, true);
     let footer_candidates = detect_repeated_edge_lines(&extraction.pages, false);
 
@@ -199,7 +201,7 @@ fn apply_page_normalization(extraction: &mut ExtractedPages) {
         .count();
 }
 
-fn refresh_printed_page_labels(extraction: &mut ExtractedPages) {
+pub fn refresh_printed_page_labels(extraction: &mut ExtractedPages) {
     extraction.page_printed_labels = extraction
         .pages
         .iter()
@@ -218,7 +220,7 @@ fn refresh_printed_page_labels(extraction: &mut ExtractedPages) {
     }
 }
 
-fn detect_printed_page_label(page_text: &str) -> Option<String> {
+pub fn detect_printed_page_label(page_text: &str) -> Option<String> {
     let lines = page_text.lines().collect::<Vec<&str>>();
 
     let page_regex = Regex::new(r"(?i)^page\s+([0-9ivxlcdm]+)$").ok()?;
@@ -259,7 +261,7 @@ fn detect_printed_page_label(page_text: &str) -> Option<String> {
     None
 }
 
-fn printed_page_label_for(labels: &[Option<String>], page_pdf: i64) -> Option<String> {
+pub fn printed_page_label_for(labels: &[Option<String>], page_pdf: i64) -> Option<String> {
     if page_pdf <= 0 {
         return None;
     }
@@ -269,7 +271,7 @@ fn printed_page_label_for(labels: &[Option<String>], page_pdf: i64) -> Option<St
         .and_then(|label| label.clone())
 }
 
-fn printed_page_labels_for_range(
+pub fn printed_page_labels_for_range(
     labels: &[Option<String>],
     page_start: i64,
     page_end: i64,
@@ -310,7 +312,7 @@ fn printed_page_labels_for_range(
     (first_detected, last_detected)
 }
 
-fn detect_repeated_edge_lines(pages: &[String], header: bool) -> HashSet<String> {
+pub fn detect_repeated_edge_lines(pages: &[String], header: bool) -> HashSet<String> {
     let mut counts = HashMap::<String, usize>::new();
     for page in pages {
         let lines = page.lines().map(str::trim).collect::<Vec<&str>>();
@@ -337,7 +339,7 @@ fn detect_repeated_edge_lines(pages: &[String], header: bool) -> HashSet<String>
         .collect()
 }
 
-fn normalize_edge_line(input: &str) -> String {
+pub fn normalize_edge_line(input: &str) -> String {
     input
         .split_whitespace()
         .collect::<Vec<&str>>()
@@ -345,15 +347,15 @@ fn normalize_edge_line(input: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn first_nonempty_line_index(lines: &[String]) -> Option<usize> {
+pub fn first_nonempty_line_index(lines: &[String]) -> Option<usize> {
     lines.iter().position(|line| !line.trim().is_empty())
 }
 
-fn last_nonempty_line_index(lines: &[String]) -> Option<usize> {
+pub fn last_nonempty_line_index(lines: &[String]) -> Option<usize> {
     lines.iter().rposition(|line| !line.trim().is_empty())
 }
 
-fn merge_hyphenated_lines(lines: Vec<String>) -> (Vec<String>, usize) {
+pub fn merge_hyphenated_lines(lines: Vec<String>) -> (Vec<String>, usize) {
     let mut merged = Vec::<String>::new();
     let mut merges = 0usize;
     let mut index = 0usize;
@@ -382,7 +384,7 @@ fn merge_hyphenated_lines(lines: Vec<String>) -> (Vec<String>, usize) {
     (merged, merges)
 }
 
-fn should_merge_hyphenated_pair(current: &str, next: &str) -> bool {
+pub fn should_merge_hyphenated_pair(current: &str, next: &str) -> bool {
     let left = current.trim_end();
     if !left.ends_with('-') {
         return false;
@@ -405,7 +407,7 @@ fn should_merge_hyphenated_pair(current: &str, next: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn collect_ocr_candidates(
+pub fn collect_ocr_candidates(
     pages: &[String],
     ocr_mode: OcrMode,
     min_text_chars: usize,

@@ -1,5 +1,7 @@
+use super::*;
+
 #[allow(clippy::too_many_arguments)]
-fn insert_list_nodes(
+pub fn insert_list_nodes(
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,
     parent_node_id: &str,
@@ -140,7 +142,7 @@ fn insert_list_nodes(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_note_nodes(
+pub fn insert_note_nodes(
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,
     parent_node_id: &str,
@@ -246,7 +248,7 @@ fn insert_note_nodes(
     Ok(())
 }
 
-fn parse_requirement_atoms(
+pub fn parse_requirement_atoms(
     text: &str,
     heading: &str,
     split_regex: &Regex,
@@ -264,7 +266,7 @@ fn parse_requirement_atoms(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_requirement_atom_nodes(
+pub fn insert_requirement_atom_nodes(
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,
     parent_node_id: &str,

@@ -1,100 +1,102 @@
+use super::*;
+
 #[derive(Debug, Default)]
-struct ChunkInsertStats {
-    processed_pdf_count: usize,
-    processed_parts: Vec<u32>,
-    ocr_page_count: usize,
-    text_layer_page_count: usize,
-    ocr_fallback_page_count: usize,
-    empty_page_count: usize,
-    header_lines_removed: usize,
-    footer_lines_removed: usize,
-    dehyphenation_merges: usize,
-    structured_chunks_inserted: usize,
-    clause_chunks_inserted: usize,
-    table_chunks_inserted: usize,
-    annex_chunks_inserted: usize,
-    page_chunks_inserted: usize,
-    nodes_total: i64,
-    clause_nodes_inserted: usize,
-    subclause_nodes_inserted: usize,
-    annex_nodes_inserted: usize,
-    table_nodes_inserted: usize,
-    table_row_nodes_inserted: usize,
-    table_cell_nodes_inserted: usize,
-    list_nodes_inserted: usize,
-    list_item_nodes_inserted: usize,
-    note_nodes_inserted: usize,
-    note_item_nodes_inserted: usize,
-    paragraph_nodes_inserted: usize,
-    requirement_atom_nodes_inserted: usize,
-    table_raw_fallback_count: usize,
-    list_parse_candidate_count: usize,
-    list_parse_fallback_count: usize,
-    table_sparse_rows_count: usize,
-    table_overloaded_rows_count: usize,
-    table_rows_with_markers_count: usize,
-    table_rows_with_descriptions_count: usize,
-    table_marker_expected_count: usize,
-    table_marker_observed_count: usize,
-    page_provenance: Vec<PageExtractionProvenance>,
-    warnings: Vec<String>,
+pub struct ChunkInsertStats {
+    pub processed_pdf_count: usize,
+    pub processed_parts: Vec<u32>,
+    pub ocr_page_count: usize,
+    pub text_layer_page_count: usize,
+    pub ocr_fallback_page_count: usize,
+    pub empty_page_count: usize,
+    pub header_lines_removed: usize,
+    pub footer_lines_removed: usize,
+    pub dehyphenation_merges: usize,
+    pub structured_chunks_inserted: usize,
+    pub clause_chunks_inserted: usize,
+    pub table_chunks_inserted: usize,
+    pub annex_chunks_inserted: usize,
+    pub page_chunks_inserted: usize,
+    pub nodes_total: i64,
+    pub clause_nodes_inserted: usize,
+    pub subclause_nodes_inserted: usize,
+    pub annex_nodes_inserted: usize,
+    pub table_nodes_inserted: usize,
+    pub table_row_nodes_inserted: usize,
+    pub table_cell_nodes_inserted: usize,
+    pub list_nodes_inserted: usize,
+    pub list_item_nodes_inserted: usize,
+    pub note_nodes_inserted: usize,
+    pub note_item_nodes_inserted: usize,
+    pub paragraph_nodes_inserted: usize,
+    pub requirement_atom_nodes_inserted: usize,
+    pub table_raw_fallback_count: usize,
+    pub list_parse_candidate_count: usize,
+    pub list_parse_fallback_count: usize,
+    pub table_sparse_rows_count: usize,
+    pub table_overloaded_rows_count: usize,
+    pub table_rows_with_markers_count: usize,
+    pub table_rows_with_descriptions_count: usize,
+    pub table_marker_expected_count: usize,
+    pub table_marker_observed_count: usize,
+    pub page_provenance: Vec<PageExtractionProvenance>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Default)]
-struct ExtractedPages {
-    pages: Vec<String>,
-    page_printed_labels: Vec<Option<String>>,
-    ocr_page_count: usize,
-    text_layer_page_count: usize,
-    ocr_fallback_page_count: usize,
-    empty_page_count: usize,
-    header_lines_removed: usize,
-    footer_lines_removed: usize,
-    dehyphenation_merges: usize,
-    page_provenance: Vec<PageExtractionProvenance>,
-    warnings: Vec<String>,
+pub struct ExtractedPages {
+    pub pages: Vec<String>,
+    pub page_printed_labels: Vec<Option<String>>,
+    pub ocr_page_count: usize,
+    pub text_layer_page_count: usize,
+    pub ocr_fallback_page_count: usize,
+    pub empty_page_count: usize,
+    pub header_lines_removed: usize,
+    pub footer_lines_removed: usize,
+    pub dehyphenation_merges: usize,
+    pub page_provenance: Vec<PageExtractionProvenance>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct PageExtractionProvenance {
-    doc_id: String,
-    page_pdf: i64,
-    backend: String,
-    reason: String,
-    text_char_count: usize,
-    ocr_char_count: Option<usize>,
-    printed_page_label: Option<String>,
-    printed_page_status: String,
+pub struct PageExtractionProvenance {
+    pub doc_id: String,
+    pub page_pdf: i64,
+    pub backend: String,
+    pub reason: String,
+    pub text_char_count: usize,
+    pub ocr_char_count: Option<usize>,
+    pub printed_page_label: Option<String>,
+    pub printed_page_status: String,
 }
 
 #[derive(Debug, Serialize)]
-struct PageProvenanceManifest {
-    manifest_version: u32,
-    run_id: String,
-    generated_at: String,
-    entries: Vec<PageExtractionProvenance>,
+pub struct PageProvenanceManifest {
+    pub manifest_version: u32,
+    pub run_id: String,
+    pub generated_at: String,
+    pub entries: Vec<PageExtractionProvenance>,
 }
 
 #[derive(Debug, Clone)]
-struct StructuredChunkDraft {
-    chunk_type: ChunkType,
-    reference: String,
-    ref_path: String,
-    heading: String,
-    text: String,
-    page_start: i64,
-    page_end: i64,
+pub struct StructuredChunkDraft {
+    pub chunk_type: ChunkType,
+    pub reference: String,
+    pub ref_path: String,
+    pub heading: String,
+    pub text: String,
+    pub page_start: i64,
+    pub page_end: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ChunkType {
+pub enum ChunkType {
     Clause,
     Table,
     Annex,
 }
 
 impl ChunkType {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             ChunkType::Clause => "clause",
             ChunkType::Table => "table",
@@ -104,7 +106,7 @@ impl ChunkType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NodeType {
+pub enum NodeType {
     Document,
     SectionHeading,
     Clause,
@@ -123,7 +125,7 @@ enum NodeType {
 }
 
 impl NodeType {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             NodeType::Document => "document",
             NodeType::SectionHeading => "section_heading",
@@ -145,57 +147,57 @@ impl NodeType {
 }
 
 #[derive(Debug)]
-struct ParsedTableRows {
-    rows: Vec<Vec<String>>,
-    markdown: Option<String>,
-    csv: Option<String>,
-    used_fallback: bool,
-    quality: TableQualityCounters,
+pub struct ParsedTableRows {
+    pub rows: Vec<Vec<String>>,
+    pub markdown: Option<String>,
+    pub csv: Option<String>,
+    pub used_fallback: bool,
+    pub quality: TableQualityCounters,
 }
 
 #[derive(Debug, Default)]
-struct TableQualityCounters {
-    sparse_rows_count: usize,
-    overloaded_rows_count: usize,
-    rows_with_markers_count: usize,
-    rows_with_descriptions_count: usize,
-    marker_expected_count: usize,
-    marker_observed_count: usize,
+pub struct TableQualityCounters {
+    pub sparse_rows_count: usize,
+    pub overloaded_rows_count: usize,
+    pub rows_with_markers_count: usize,
+    pub rows_with_descriptions_count: usize,
+    pub marker_expected_count: usize,
+    pub marker_observed_count: usize,
 }
 
 #[derive(Debug)]
-struct ListItemDraft {
-    marker: String,
-    marker_norm: String,
-    marker_style: String,
-    text: String,
-    depth: i64,
+pub struct ListItemDraft {
+    pub marker: String,
+    pub marker_norm: String,
+    pub marker_style: String,
+    pub text: String,
+    pub depth: i64,
 }
 
 #[derive(Debug)]
-struct NoteItemDraft {
-    marker: String,
-    marker_norm: String,
-    text: String,
+pub struct NoteItemDraft {
+    pub marker: String,
+    pub marker_norm: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
-struct SectionHeadingDraft {
-    reference: String,
-    heading: String,
-    page_pdf: i64,
+pub struct SectionHeadingDraft {
+    pub reference: String,
+    pub heading: String,
+    pub page_pdf: i64,
 }
 
 #[derive(Debug)]
-struct StructuredChunkParser {
-    clause_heading: Regex,
-    table_heading: Regex,
-    annex_heading: Regex,
-    toc_line: Regex,
+pub struct StructuredChunkParser {
+    pub clause_heading: Regex,
+    pub table_heading: Regex,
+    pub annex_heading: Regex,
+    pub toc_line: Regex,
 }
 
 impl StructuredChunkParser {
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         Ok(Self {
             clause_heading: Regex::new(r"^\s*(\d+(?:\.\d+)+)\s+(.+)$")
                 .context("failed to compile clause heading regex")?,
@@ -208,7 +210,7 @@ impl StructuredChunkParser {
         })
     }
 
-    fn parse_pages(&self, pages: &[String]) -> Vec<StructuredChunkDraft> {
+    pub fn parse_pages(&self, pages: &[String]) -> Vec<StructuredChunkDraft> {
         #[derive(Debug)]
         struct ActiveChunk {
             chunk_type: ChunkType,
@@ -280,7 +282,7 @@ impl StructuredChunkParser {
         chunks
     }
 
-    fn detect_heading(&self, line: &str) -> Option<(ChunkType, String, String)> {
+    pub fn detect_heading(&self, line: &str) -> Option<(ChunkType, String, String)> {
         if self.toc_line.is_match(line) {
             return None;
         }
@@ -309,7 +311,9 @@ impl StructuredChunkParser {
     }
 }
 
-fn split_long_structured_chunks(chunks: Vec<StructuredChunkDraft>) -> Vec<StructuredChunkDraft> {
+pub fn split_long_structured_chunks(
+    chunks: Vec<StructuredChunkDraft>,
+) -> Vec<StructuredChunkDraft> {
     let mut expanded = Vec::<StructuredChunkDraft>::new();
 
     for chunk in chunks {
@@ -346,7 +350,7 @@ fn split_long_structured_chunks(chunks: Vec<StructuredChunkDraft>) -> Vec<Struct
     expanded
 }
 
-fn body_without_heading(text: &str, heading: &str) -> String {
+pub fn body_without_heading(text: &str, heading: &str) -> String {
     let mut lines = text.lines().collect::<Vec<&str>>();
     if lines
         .first()
@@ -359,7 +363,7 @@ fn body_without_heading(text: &str, heading: &str) -> String {
     lines.join(" ")
 }
 
-fn split_words_with_overlap(text: &str, max_words: usize, overlap_words: usize) -> Vec<String> {
+pub fn split_words_with_overlap(text: &str, max_words: usize, overlap_words: usize) -> Vec<String> {
     let words = text.split_whitespace().collect::<Vec<&str>>();
     if words.is_empty() {
         return vec![String::new()];

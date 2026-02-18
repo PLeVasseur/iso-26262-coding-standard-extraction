@@ -1,10 +1,12 @@
-fn non_whitespace_char_count(text: &str) -> usize {
+use super::*;
+
+pub fn non_whitespace_char_count(text: &str) -> usize {
     text.chars()
         .filter(|character| !character.is_whitespace())
         .count()
 }
 
-fn extract_page_with_ocr(pdf_path: &Path, page_number: usize, ocr_lang: &str) -> Result<String> {
+pub fn extract_page_with_ocr(pdf_path: &Path, page_number: usize, ocr_lang: &str) -> Result<String> {
     let pdf_stem = pdf_path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -86,11 +88,11 @@ fn extract_page_with_ocr(pdf_path: &Path, page_number: usize, ocr_lang: &str) ->
         .to_string())
 }
 
-fn command_available(program: &str) -> bool {
+pub fn command_available(program: &str) -> bool {
     Command::new(program).arg("--version").output().is_ok()
 }
 
-fn extract_pages_with_pdftotext(
+pub fn extract_pages_with_pdftotext(
     pdf_path: &Path,
     max_pages_per_doc: Option<usize>,
 ) -> Result<Vec<String>> {
@@ -131,19 +133,19 @@ fn extract_pages_with_pdftotext(
     Ok(pages)
 }
 
-fn sync_fts_index(connection: &Connection) -> Result<()> {
+pub fn sync_fts_index(connection: &Connection) -> Result<()> {
     connection
         .execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')", [])
         .context("failed to rebuild FTS index")?;
     Ok(())
 }
 
-fn count_rows(connection: &Connection, sql: &str) -> Result<i64> {
+pub fn count_rows(connection: &Connection, sql: &str) -> Result<i64> {
     let count = connection.query_row(sql, [], |row| row.get(0))?;
     Ok(count)
 }
 
-fn collect_tool_versions() -> Result<ToolVersions> {
+pub fn collect_tool_versions() -> Result<ToolVersions> {
     Ok(ToolVersions {
         rustc: command_version("rustc", &["--version"])?,
         cargo: command_version("cargo", &["--version"])?,
@@ -154,7 +156,7 @@ fn collect_tool_versions() -> Result<ToolVersions> {
     })
 }
 
-fn command_version_optional(program: &str, args: &[&str]) -> Option<String> {
+pub fn command_version_optional(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program).args(args).output().ok()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -173,7 +175,7 @@ fn command_version_optional(program: &str, args: &[&str]) -> Option<String> {
         .map(|line| line.to_string())
 }
 
-fn command_version(program: &str, args: &[&str]) -> Result<String> {
+pub fn command_version(program: &str, args: &[&str]) -> Result<String> {
     let output = Command::new(program)
         .args(args)
         .output()
@@ -202,11 +204,11 @@ fn command_version(program: &str, args: &[&str]) -> Result<String> {
     Ok(version_line.to_string())
 }
 
-fn doc_id_for(pdf: &PdfEntry) -> String {
+pub fn doc_id_for(pdf: &PdfEntry) -> String {
     format!("ISO26262-{}-{}", pdf.part, pdf.year)
 }
 
-fn render_ingest_command(args: &IngestArgs) -> String {
+pub fn render_ingest_command(args: &IngestArgs) -> String {
     let mut command = vec![
         "iso26262".to_string(),
         "ingest".to_string(),

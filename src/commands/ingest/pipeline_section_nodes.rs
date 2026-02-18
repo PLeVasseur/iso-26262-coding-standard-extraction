@@ -1,5 +1,7 @@
+use super::*;
+
 #[allow(clippy::too_many_arguments)]
-fn insert_section_heading_nodes(
+pub fn insert_section_heading_nodes(
     node_statement: &mut rusqlite::Statement<'_>,
     doc_id: &str,
     source_hash: &str,

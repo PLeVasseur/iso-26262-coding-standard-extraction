@@ -1,4 +1,6 @@
-fn infer_table_header_rows(rows: &[Vec<String>]) -> usize {
+use super::*;
+
+pub fn infer_table_header_rows(rows: &[Vec<String>]) -> usize {
     let Some(first_row) = rows.first() else {
         return 0;
     };
@@ -25,7 +27,7 @@ fn infer_table_header_rows(rows: &[Vec<String>]) -> usize {
     }
 }
 
-fn count_row_marker_tokens(row: &[String]) -> usize {
+pub fn count_row_marker_tokens(row: &[String]) -> usize {
     let mut marker_tokens = HashSet::<(i64, Option<char>)>::new();
 
     for cell in row {
@@ -40,7 +42,7 @@ fn count_row_marker_tokens(row: &[String]) -> usize {
     marker_tokens.len()
 }
 
-fn has_row_description(row: &[String]) -> bool {
+pub fn has_row_description(row: &[String]) -> bool {
     if row.len() < 2 {
         return false;
     }
@@ -49,7 +51,7 @@ fn has_row_description(row: &[String]) -> bool {
     !description.is_empty() && description.chars().any(|value| value.is_ascii_alphabetic())
 }
 
-fn estimate_expected_marker_count(observed_markers: &HashSet<(i64, Option<char>)>) -> usize {
+pub fn estimate_expected_marker_count(observed_markers: &HashSet<(i64, Option<char>)>) -> usize {
     let mut grouped = HashMap::<i64, Vec<Option<char>>>::new();
 
     for (number, suffix) in observed_markers {
@@ -85,7 +87,7 @@ fn estimate_expected_marker_count(observed_markers: &HashSet<(i64, Option<char>)
     expected
 }
 
-fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
+pub fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
     let marker_with_body_regex = Regex::new(r"^(?P<marker>\d+[A-Za-z]?)[\.)]?\s+(?P<body>.+)$")
         .expect("valid marker with body regex");
     let marker_only_regex =
@@ -205,7 +207,7 @@ fn reconstruct_table_rows_from_markers(lines: &[&str]) -> Vec<Vec<String>> {
     rows
 }
 
-fn prefer_reconstructed_rows(
+pub fn prefer_reconstructed_rows(
     original_rows_count: usize,
     original_quality: &TableQualityCounters,
     reconstructed_rows_count: usize,
@@ -245,7 +247,7 @@ fn prefer_reconstructed_rows(
                 >= original_quality.rows_with_descriptions_count)
 }
 
-fn ratio_usize(numerator: usize, denominator: usize) -> Option<f64> {
+pub fn ratio_usize(numerator: usize, denominator: usize) -> Option<f64> {
     if denominator == 0 {
         None
     } else {
@@ -253,7 +255,7 @@ fn ratio_usize(numerator: usize, denominator: usize) -> Option<f64> {
     }
 }
 
-fn extract_body_lines<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
+pub fn extract_body_lines<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
     let mut lines = text.lines().collect::<Vec<&str>>();
     if let Some(first) = lines.first() {
         if first.trim() == heading.trim() {
@@ -267,7 +269,7 @@ fn extract_body_lines<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
         .collect()
 }
 
-fn extract_body_lines_preserve_blanks<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
+pub fn extract_body_lines_preserve_blanks<'a>(text: &'a str, heading: &str) -> Vec<&'a str> {
     let mut lines = text.lines().collect::<Vec<&str>>();
     if let Some(first) = lines.first() {
         if first.trim() == heading.trim() {
@@ -278,11 +280,11 @@ fn extract_body_lines_preserve_blanks<'a>(text: &'a str, heading: &str) -> Vec<&
     lines
 }
 
-fn line_is_noise(line: &str) -> bool {
+pub fn line_is_noise(line: &str) -> bool {
     contains_iso_watermark_noise(line)
 }
 
-fn contains_iso_watermark_noise(text: &str) -> bool {
+pub fn contains_iso_watermark_noise(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     let has_store_download = lower.contains("iso store order") && lower.contains("downloaded:");
     let has_single_user_notice = (lower.contains("single user licence only")
@@ -295,7 +297,7 @@ fn contains_iso_watermark_noise(text: &str) -> bool {
     has_store_download || has_single_user_notice || has_license_banner
 }
 
-fn split_table_cells(line: &str, cell_split_regex: &Regex) -> Vec<String> {
+pub fn split_table_cells(line: &str, cell_split_regex: &Regex) -> Vec<String> {
     let mut cells = cell_split_regex
         .split(line)
         .map(str::trim)
@@ -319,7 +321,7 @@ fn split_table_cells(line: &str, cell_split_regex: &Regex) -> Vec<String> {
     }
 }
 
-fn table_to_markdown(rows: &[Vec<String>]) -> String {
+pub fn table_to_markdown(rows: &[Vec<String>]) -> String {
     let col_count = rows.iter().map(|row| row.len()).max().unwrap_or(1).max(1);
     let mut padded_rows = rows
         .iter()
@@ -354,7 +356,7 @@ fn table_to_markdown(rows: &[Vec<String>]) -> String {
     lines.join("\n")
 }
 
-fn table_to_csv(rows: &[Vec<String>]) -> String {
+pub fn table_to_csv(rows: &[Vec<String>]) -> String {
     rows.iter()
         .map(|row| {
             row.iter()
@@ -366,7 +368,7 @@ fn table_to_csv(rows: &[Vec<String>]) -> String {
         .join("\n")
 }
 
-fn escape_csv_cell(value: &str) -> String {
+pub fn escape_csv_cell(value: &str) -> String {
     if value.contains(',') || value.contains('"') || value.contains('\n') {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {

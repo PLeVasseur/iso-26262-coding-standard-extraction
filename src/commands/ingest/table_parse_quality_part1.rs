@@ -1,4 +1,6 @@
-fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> ParsedTableRows {
+use super::*;
+
+pub fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> ParsedTableRows {
     let body_lines = extract_body_lines(text, heading);
     let mut rows = Vec::<Vec<String>>::new();
 
@@ -64,13 +66,13 @@ fn parse_table_rows(text: &str, heading: &str, cell_split_regex: &Regex) -> Pars
     }
 }
 
-fn normalize_table_rows_for_alignment(rows: &mut Vec<Vec<String>>) {
+pub fn normalize_table_rows_for_alignment(rows: &mut Vec<Vec<String>>) {
     merge_single_cell_continuations(rows);
     split_marker_rows_with_trailing_ratings(rows);
     redistribute_dense_marker_ratings(rows);
 }
 
-fn merge_single_cell_continuations(rows: &mut Vec<Vec<String>>) {
+pub fn merge_single_cell_continuations(rows: &mut Vec<Vec<String>>) {
     let mut merged = Vec::<Vec<String>>::new();
 
     for row in rows.drain(..) {
@@ -102,7 +104,7 @@ fn merge_single_cell_continuations(rows: &mut Vec<Vec<String>>) {
     *rows = merged;
 }
 
-fn split_marker_rows_with_trailing_ratings(rows: &mut [Vec<String>]) {
+pub fn split_marker_rows_with_trailing_ratings(rows: &mut [Vec<String>]) {
     for row in rows {
         if row.len() != 2 {
             continue;
@@ -152,7 +154,7 @@ fn split_marker_rows_with_trailing_ratings(rows: &mut [Vec<String>]) {
     }
 }
 
-fn redistribute_dense_marker_ratings(rows: &mut [Vec<String>]) {
+pub fn redistribute_dense_marker_ratings(rows: &mut [Vec<String>]) {
     for row_index in 0..rows.len() {
         let Some(first_cell) = rows[row_index].first() else {
             continue;
@@ -211,11 +213,11 @@ fn redistribute_dense_marker_ratings(rows: &mut [Vec<String>]) {
     }
 }
 
-fn is_table_rating_token(token: &str) -> bool {
+pub fn is_table_rating_token(token: &str) -> bool {
     matches!(token, "+" | "++" | "-" | "--" | "+/-" | "+/−" | "−/+" | "o")
 }
 
-fn is_footnote_marker_line(line: &str) -> bool {
+pub fn is_footnote_marker_line(line: &str) -> bool {
     let trimmed = line.trim_matches(['(', ')', '.', ':', ';', ',']).trim();
     trimmed.len() == 1
         && trimmed
@@ -225,7 +227,7 @@ fn is_footnote_marker_line(line: &str) -> bool {
             .unwrap_or(false)
 }
 
-fn backfill_asil_marker_row_ratings(rows: &mut [Vec<String>], body_lines: &[&str]) {
+pub fn backfill_asil_marker_row_ratings(rows: &mut [Vec<String>], body_lines: &[&str]) {
     if !looks_like_asil_matrix(body_lines) {
         return;
     }
@@ -267,7 +269,7 @@ fn backfill_asil_marker_row_ratings(rows: &mut [Vec<String>], body_lines: &[&str
     }
 }
 
-fn looks_like_asil_matrix(body_lines: &[&str]) -> bool {
+pub fn looks_like_asil_matrix(body_lines: &[&str]) -> bool {
     let has_asil_header = body_lines
         .iter()
         .any(|line| line.to_ascii_uppercase().contains("ASIL"));
@@ -292,7 +294,7 @@ fn looks_like_asil_matrix(body_lines: &[&str]) -> bool {
     columns.len() == 4
 }
 
-fn analyze_table_rows(rows: &[Vec<String>]) -> TableQualityCounters {
+pub fn analyze_table_rows(rows: &[Vec<String>]) -> TableQualityCounters {
     let mut counters = TableQualityCounters::default();
     let mut observed_markers = HashSet::<(i64, Option<char>)>::new();
 
@@ -322,7 +324,7 @@ fn analyze_table_rows(rows: &[Vec<String>]) -> TableQualityCounters {
     counters
 }
 
-fn parse_table_marker_token(value: &str) -> Option<(i64, Option<char>)> {
+pub fn parse_table_marker_token(value: &str) -> Option<(i64, Option<char>)> {
     let marker = normalize_marker_label(value);
     parse_numeric_alpha_marker(&marker)
 }

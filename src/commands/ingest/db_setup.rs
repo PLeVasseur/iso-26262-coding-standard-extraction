@@ -1,4 +1,6 @@
-fn configure_connection(connection: &Connection) -> Result<()> {
+use super::*;
+
+pub fn configure_connection(connection: &Connection) -> Result<()> {
     connection
         .pragma_update(None, "journal_mode", "WAL")
         .context("failed to set journal_mode=WAL")?;
@@ -8,7 +10,7 @@ fn configure_connection(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn ensure_schema(connection: &Connection) -> Result<()> {
+pub fn ensure_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS metadata (
@@ -150,7 +152,7 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_embedding_schema(connection: &Connection) -> Result<()> {
+pub fn ensure_embedding_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS embedding_models (
@@ -184,7 +186,7 @@ pub(crate) fn ensure_embedding_schema(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn ensure_column_exists(
+pub fn ensure_column_exists(
     connection: &Connection,
     table_name: &str,
     column_definition: &str,
@@ -214,7 +216,7 @@ fn ensure_column_exists(
     Ok(())
 }
 
-fn upsert_docs(connection: &mut Connection, inventory: &PdfInventoryManifest) -> Result<usize> {
+pub fn upsert_docs(connection: &mut Connection, inventory: &PdfInventoryManifest) -> Result<usize> {
     let tx = connection.transaction()?;
 
     {
