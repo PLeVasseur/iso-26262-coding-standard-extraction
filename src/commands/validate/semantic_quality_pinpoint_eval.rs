@@ -337,9 +337,9 @@ pub fn evaluate_pinpoint_for_chunk(
 
 #[path = "semantic_quality_pinpoint_candidates.rs"]
 mod semantic_quality_pinpoint_candidates;
-#[path = "semantic_quality_pinpoint_utils.rs"]
-mod semantic_quality_pinpoint_utils;
+#[path = "semantic_quality_pinpoint_scoring.rs"]
+mod semantic_quality_pinpoint_scoring;
 
 pub use self::semantic_quality_pinpoint_candidates::*;
-pub use self::semantic_quality_pinpoint_utils::*;
+pub use self::semantic_quality_pinpoint_scoring::*;
 use super::*;

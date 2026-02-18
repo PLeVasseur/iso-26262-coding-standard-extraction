@@ -2,8 +2,8 @@ use super::*;
 
 #[path = "semantic_quality_checks.rs"]
 mod semantic_quality_checks;
-#[path = "semantic_quality_shared.rs"]
-mod semantic_quality_shared;
+#[path = "semantic_quality_gates.rs"]
+mod semantic_quality_gates;
 #[path = "semantic_quality_eval.rs"]
 mod semantic_quality_eval;
 #[path = "semantic_quality_stats.rs"]
@@ -26,5 +26,5 @@ pub use self::semantic_quality_exact::*;
 pub use self::semantic_quality_manifest::*;
 pub use self::semantic_quality_pinpoint::*;
 pub use self::semantic_quality_retrieval::*;
-pub use self::semantic_quality_shared::*;
+pub use self::semantic_quality_gates::*;
 pub use self::semantic_quality_stats::*;
