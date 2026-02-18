@@ -165,6 +165,9 @@ pub struct QueryArgs {
     #[arg(long, default_value_t = false)]
     pub allow_lexical_fallback: bool,
 
+    #[arg(long, default_value_t = 2000)]
+    pub timeout_ms: u64,
+
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
 
@@ -182,6 +185,12 @@ pub struct QueryArgs {
 
     #[arg(long, default_value_t = false)]
     pub with_descendants: bool,
+
+    #[arg(long, default_value_t = false)]
+    pub with_pinpoint: bool,
+
+    #[arg(long, default_value_t = 3)]
+    pub pinpoint_max_units: usize,
 
     #[arg(long, default_value_t = false)]
     pub json: bool,

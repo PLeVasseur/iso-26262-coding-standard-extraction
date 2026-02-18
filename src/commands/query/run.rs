@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
@@ -58,6 +59,23 @@ struct DescendantNode {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct PinpointUnit {
+    unit_id: String,
+    unit_type: String,
+    score: f64,
+    text_preview: String,
+    token_signature: String,
+    char_start: Option<usize>,
+    char_end: Option<usize>,
+    row_idx: Option<i64>,
+    col_idx: Option<i64>,
+    row_key: Option<String>,
+    origin_node_id: Option<String>,
+    citation_anchor_id: Option<String>,
+    citation_anchor_compatible: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct QueryRankTrace {
     lexical_rank: Option<usize>,
     semantic_rank: Option<usize>,
@@ -96,6 +114,8 @@ struct QueryResult {
     citation_anchor_id: Option<String>,
     ancestor_nodes: Option<Vec<String>>,
     descendants: Option<Vec<DescendantNode>>,
+    pinpoint_fallback_used: Option<bool>,
+    pinpoint_units: Option<Vec<PinpointUnit>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,6 +124,9 @@ struct RetrievalMetadata {
     effective_mode: String,
     lexical_k: usize,
     semantic_k: usize,
+    lexical_candidate_count: usize,
+    semantic_candidate_count: usize,
+    fused_candidate_count: usize,
     fusion: String,
     rrf_k: u32,
     semantic_model_id: Option<String>,
@@ -111,6 +134,10 @@ struct RetrievalMetadata {
     exact_intent_forced_lexical: bool,
     fallback_used: bool,
     fallback_reason: Option<String>,
+    pinpoint_enabled: bool,
+    pinpoint_max_units: usize,
+    timeout_ms: u64,
+    query_duration_ms: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -126,6 +153,7 @@ struct QueryResponse {
 }
 
 pub fn run(args: QueryArgs) -> Result<()> {
+    let query_started = Instant::now();
     let query_text = args.query.trim();
     if query_text.is_empty() {
         bail!("query must not be empty");
@@ -156,8 +184,10 @@ pub fn run(args: QueryArgs) -> Result<()> {
         .map(str::to_lowercase);
 
     let limit = args.limit.max(1);
+    let pinpoint_max_units = args.pinpoint_max_units.max(1).min(12);
     let lexical_k = clamp_candidates(args.lexical_k.max(limit));
     let semantic_k = clamp_candidates(args.semantic_k.max(limit));
+    let timeout_budget = QueryTimeoutBudget::new(args.timeout_ms);
     let exact_intent = is_exact_intent_query(query_text);
 
     let requested_mode = args.retrieval_mode;
@@ -197,6 +227,7 @@ pub fn run(args: QueryArgs) -> Result<()> {
             node_type_filter.as_deref(),
             lexical_k,
         )?;
+        enforce_timeout(timeout_budget, "lexical retrieval")?;
     }
 
     let mut semantic_candidates = Vec::<QueryCandidate>::new();
@@ -249,10 +280,14 @@ pub fn run(args: QueryArgs) -> Result<()> {
                 model_id,
                 model.dimensions,
                 semantic_k,
+                timeout_budget,
             )?;
+            enforce_timeout(timeout_budget, "semantic retrieval")?;
         }
     }
 
+    let lexical_candidate_count = lexical_candidates.len();
+    let semantic_candidate_count = semantic_candidates.len();
     let mut candidates = match effective_mode {
         RetrievalMode::Lexical => lexical_candidates,
         RetrievalMode::Semantic => semantic_candidates,
@@ -263,24 +298,35 @@ pub fn run(args: QueryArgs) -> Result<()> {
             args.fusion,
         )?,
     };
+    let fused_candidate_count = candidates.len();
 
     sort_candidates(&mut candidates);
     if candidates.len() > limit {
         candidates.truncate(limit);
     }
+    enforce_timeout(timeout_budget, "candidate ranking")?;
 
     let results = to_results(
         &connection,
+        query_text,
         candidates,
         args.with_ancestors,
         args.with_descendants,
+        args.with_pinpoint,
+        pinpoint_max_units,
     )?;
+    enforce_timeout(timeout_budget, "result hydration")?;
+
+    let query_duration_ms = query_started.elapsed().as_secs_f64() * 1000.0;
 
     let retrieval_metadata = RetrievalMetadata {
         requested_mode: retrieval_mode_label(requested_mode).to_string(),
         effective_mode: retrieval_mode_label(effective_mode).to_string(),
         lexical_k,
         semantic_k,
+        lexical_candidate_count,
+        semantic_candidate_count,
+        fused_candidate_count,
         fusion: fusion_mode_label(args.fusion).to_string(),
         rrf_k: args.rrf_k,
         semantic_model_id,
@@ -288,6 +334,10 @@ pub fn run(args: QueryArgs) -> Result<()> {
         exact_intent_forced_lexical,
         fallback_used,
         fallback_reason,
+        pinpoint_enabled: args.with_pinpoint,
+        pinpoint_max_units,
+        timeout_ms: args.timeout_ms,
+        query_duration_ms,
     };
 
     info!(
@@ -297,6 +347,10 @@ pub fn run(args: QueryArgs) -> Result<()> {
         part_filter = ?args.part,
         chunk_type_filter = ?chunk_type_filter,
         node_type_filter = ?node_type_filter,
+        lexical_candidate_count,
+        semantic_candidate_count,
+        fused_candidate_count,
+        query_duration_ms,
         result_count = results.len(),
         "query completed"
     );
@@ -334,6 +388,49 @@ fn fusion_mode_label(value: FusionMode) -> &'static str {
 
 fn clamp_candidates(value: usize) -> usize {
     value.clamp(1, MAX_QUERY_CANDIDATES)
+}
+
+#[derive(Clone, Copy)]
+struct QueryTimeoutBudget {
+    started: Instant,
+    timeout_ms: u64,
+}
+
+impl QueryTimeoutBudget {
+    fn new(timeout_ms: u64) -> Option<Self> {
+        if timeout_ms == 0 {
+            return None;
+        }
+        Some(Self {
+            started: Instant::now(),
+            timeout_ms,
+        })
+    }
+
+    fn elapsed_ms(self) -> f64 {
+        self.started.elapsed().as_secs_f64() * 1000.0
+    }
+
+    fn enforce(self, stage: &str) -> Result<()> {
+        let elapsed_ms = self.elapsed_ms();
+        if elapsed_ms <= self.timeout_ms as f64 {
+            return Ok(());
+        }
+
+        bail!(
+            "query timeout exceeded during {} (elapsed {:.1} ms > budget {} ms); reduce --lexical-k/--semantic-k, narrow filters, or increase --timeout-ms",
+            stage,
+            elapsed_ms,
+            self.timeout_ms
+        )
+    }
+}
+
+fn enforce_timeout(timeout_budget: Option<QueryTimeoutBudget>, stage: &str) -> Result<()> {
+    if let Some(timeout_budget) = timeout_budget {
+        timeout_budget.enforce(stage)?;
+    }
+    Ok(())
 }
 
 fn sort_candidates(candidates: &mut [QueryCandidate]) {

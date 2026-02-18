@@ -71,8 +71,11 @@ fn collect_semantic_candidates(
     model_id: &str,
     embedding_dim: usize,
     candidate_limit: usize,
+    timeout_budget: Option<QueryTimeoutBudget>,
 ) -> Result<Vec<QueryCandidate>> {
-    let query_embedding = embed_text_local(query_text, embedding_dim);
+    let semantic_query_text = semantic_embedding_query_text(query_text);
+    let query_embedding = embed_text_local(&semantic_query_text, embedding_dim);
+    let query_tokens = query_signal_tokens(&semantic_query_text);
     let mut statement = connection.prepare(
         "
         SELECT
@@ -116,7 +119,13 @@ fn collect_semantic_candidates(
     ])?;
 
     let mut out = Vec::<QueryCandidate>::new();
+    let mut scanned_rows = 0usize;
     while let Some(row) = rows.next()? {
+        scanned_rows += 1;
+        if scanned_rows % 64 == 0 {
+            enforce_timeout(timeout_budget, "semantic candidate scan")?;
+        }
+
         let row_dim = row.get::<_, i64>(20)? as usize;
         if row_dim != embedding_dim {
             continue;
@@ -129,8 +138,13 @@ fn collect_semantic_candidates(
         };
 
         let semantic_score = cosine_similarity(&query_embedding, &candidate_embedding);
+        let reference = row.get::<_, String>(5)?;
+        let heading = row.get::<_, String>(6)?;
+        let snippet = row.get::<_, String>(10)?;
+        let lexical_bonus = lexical_signal_bonus(&query_tokens, &reference, &heading, &snippet);
+        let score = semantic_score * 0.45 + lexical_bonus * 0.55;
         out.push(QueryCandidate {
-            score: semantic_score,
+            score,
             match_kind: "semantic_cosine".to_string(),
             source_tags: vec!["semantic".to_string()],
             lexical_rank: None,
@@ -143,12 +157,12 @@ fn collect_semantic_candidates(
             part: row.get::<_, u32>(2)?,
             year: row.get::<_, u32>(3)?,
             chunk_type: row.get(4)?,
-            reference: row.get(5)?,
-            heading: row.get(6)?,
+            reference,
+            heading,
             page_pdf_start: row.get(7)?,
             page_pdf_end: row.get(8)?,
             source_hash: row.get(9)?,
-            snippet: row.get(10)?,
+            snippet,
             origin_node_id: row.get(11)?,
             leaf_node_type: row.get(12)?,
             ancestor_path: row.get(13)?,
@@ -168,6 +182,7 @@ fn collect_semantic_candidates(
         candidate.semantic_rank = Some(index + 1);
         candidate.semantic_score = Some(candidate.score);
     }
+    enforce_timeout(timeout_budget, "semantic candidate ranking")?;
 
     Ok(out)
 }
@@ -280,4 +295,92 @@ fn looks_like_clause_reference(value: &str) -> bool {
     parts
         .iter()
         .all(|part| !part.is_empty() && part.chars().all(|character| character.is_ascii_digit()))
+}
+
+fn query_signal_tokens(query_text: &str) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "a",
+        "an",
+        "and",
+        "around",
+        "concept",
+        "concerning",
+        "for",
+        "guidance",
+        "in",
+        "of",
+        "on",
+        "related",
+        "requirement",
+        "requirements",
+        "the",
+        "to",
+        "with",
+    ];
+
+    let mut tokens = query_text
+        .to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 3)
+        .filter(|token| STOPWORDS.iter().all(|stopword| stopword != token))
+        .map(str::to_string)
+        .collect::<Vec<String>>();
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn lexical_signal_bonus(
+    query_tokens: &[String],
+    reference: &str,
+    heading: &str,
+    text: &str,
+) -> f64 {
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let haystack = format!(
+        "{} {} {}",
+        reference.to_ascii_lowercase(),
+        heading.to_ascii_lowercase(),
+        text.to_ascii_lowercase()
+    );
+    let overlap = query_tokens
+        .iter()
+        .filter(|token| haystack.contains(token.as_str()))
+        .count();
+    overlap as f64 / query_tokens.len() as f64
+}
+
+fn semantic_embedding_query_text(query_text: &str) -> String {
+    const NOISE_PREFIXES: &[&str] = &[
+        "concept guidance for ",
+        "requirements concerning ",
+        "requirements regarding ",
+        "requirements for ",
+        "guidance for ",
+    ];
+
+    let normalized = query_text
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if normalized.is_empty() {
+        return normalized;
+    }
+
+    let lowered = normalized.to_ascii_lowercase();
+    for prefix in NOISE_PREFIXES {
+        if lowered.starts_with(prefix) {
+            let stripped = normalized[prefix.len()..].trim();
+            if !stripped.is_empty() {
+                return stripped.to_string();
+            }
+        }
+    }
+
+    normalized
 }

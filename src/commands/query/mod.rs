@@ -1,5 +1,6 @@
 include!("run.rs");
 include!("retrieval.rs");
 include!("semantic_and_fusion.rs");
+include!("pinpoint.rs");
 include!("ranking_and_output.rs");
 include!("hierarchy_and_citation.rs");
