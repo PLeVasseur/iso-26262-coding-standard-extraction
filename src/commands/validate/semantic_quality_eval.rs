@@ -355,6 +355,10 @@ fn evaluate_semantic_query(
     embedding_dim: usize,
     retrieval_limit: usize,
 ) -> Result<QueryEvalRecord> {
+    let exact_intent_priority = query.must_hit_top1
+        || query.intent.eq_ignore_ascii_case("exact_ref")
+        || query.intent.eq_ignore_ascii_case("exact_ref_probe");
+
     let lexical_started = std::time::Instant::now();
     let lexical_hits = semantic_eval_lexical_hits(
         connection,
@@ -386,6 +390,7 @@ fn evaluate_semantic_query(
         model_id,
         embedding_dim,
         retrieval_limit,
+        exact_intent_priority,
     )?;
     let hybrid_latency_ms = hybrid_started.elapsed().as_secs_f64() * 1000.0;
 
@@ -397,6 +402,7 @@ fn evaluate_semantic_query(
         model_id,
         embedding_dim,
         retrieval_limit,
+        exact_intent_priority,
     )?;
 
     let expected = query

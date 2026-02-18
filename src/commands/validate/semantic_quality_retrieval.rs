@@ -6,6 +6,7 @@ fn semantic_eval_hybrid_hits(
     model_id: &str,
     embedding_dim: usize,
     limit: usize,
+    exact_intent_priority: bool,
 ) -> Result<Vec<SemanticRetrievedHit>> {
     let lexical_hits = semantic_eval_lexical_hits(
         connection,
@@ -74,6 +75,14 @@ fn semantic_eval_hybrid_hits(
             )
             .then(left.chunk_id.cmp(&right.chunk_id))
     });
+    if exact_intent_priority
+        && let Some(mut lexical_top1) = lexical_hits.first().cloned()
+    {
+        out.retain(|hit| hit.chunk_id != lexical_top1.chunk_id);
+        lexical_top1.score = out.first().map_or(1.0, |row| row.score + 1.0);
+        out.insert(0, lexical_top1);
+    }
+
     if out.len() > limit {
         out.truncate(limit);
     }
@@ -169,11 +178,14 @@ fn semantic_eval_semantic_hits(
     }
 
     let query_embedding = crate::semantic::embed_text_local(query_text, embedding_dim);
+    let query_tokens = query_signal_tokens(query_text);
     let mut statement = connection.prepare(
         "
         SELECT
           c.chunk_id,
           COALESCE(c.ref, ''),
+          COALESCE(c.heading, ''),
+          COALESCE(c.text, ''),
           c.page_pdf_start,
           c.page_pdf_end,
           c.citation_anchor_id,
@@ -196,22 +208,29 @@ fn semantic_eval_semantic_hits(
     ])?;
     let mut hits = Vec::<SemanticRetrievedHit>::new();
     while let Some(row) = rows.next()? {
-        let row_dim = row.get::<_, i64>(6)? as usize;
+        let row_dim = row.get::<_, i64>(8)? as usize;
         if row_dim != embedding_dim {
             continue;
         }
 
-        let blob = row.get::<_, Vec<u8>>(5)?;
+        let blob = row.get::<_, Vec<u8>>(7)?;
         let Some(embedding) = crate::semantic::decode_embedding_blob(&blob, embedding_dim) else {
             continue;
         };
-        let score = crate::semantic::cosine_similarity(&query_embedding, &embedding);
+        let semantic_score = crate::semantic::cosine_similarity(&query_embedding, &embedding);
+        let lexical_bonus = lexical_signal_bonus(
+            &query_tokens,
+            row.get::<_, String>(1)?.as_str(),
+            row.get::<_, String>(2)?.as_str(),
+            row.get::<_, String>(3)?.as_str(),
+        );
+        let score = semantic_score * 0.55 + lexical_bonus * 0.45;
         hits.push(SemanticRetrievedHit {
             chunk_id: row.get(0)?,
             reference: row.get(1)?,
-            page_pdf_start: row.get(2)?,
-            page_pdf_end: row.get(3)?,
-            citation_anchor_id: row.get(4)?,
+            page_pdf_start: row.get(4)?,
+            page_pdf_end: row.get(5)?,
+            citation_anchor_id: row.get(6)?,
             score,
         });
     }
@@ -298,6 +317,57 @@ fn top_k_jaccard_overlap(
 
     let intersection_count = left_ids.intersection(&right_ids).count();
     Some(intersection_count as f64 / union_count as f64)
+}
+
+fn query_signal_tokens(query_text: &str) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "a",
+        "an",
+        "and",
+        "around",
+        "concept",
+        "concerning",
+        "for",
+        "guidance",
+        "in",
+        "of",
+        "on",
+        "related",
+        "requirement",
+        "requirements",
+        "the",
+        "to",
+        "with",
+    ];
+
+    let mut tokens = query_text
+        .to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 3)
+        .filter(|token| STOPWORDS.iter().all(|stopword| stopword != token))
+        .map(str::to_string)
+        .collect::<Vec<String>>();
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn lexical_signal_bonus(query_tokens: &[String], reference: &str, heading: &str, text: &str) -> f64 {
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let haystack = format!(
+        "{} {} {}",
+        reference.to_ascii_lowercase(),
+        heading.to_ascii_lowercase(),
+        text.to_ascii_lowercase()
+    );
+    let overlap = query_tokens
+        .iter()
+        .filter(|token| haystack.contains(token.as_str()))
+        .count();
+    overlap as f64 / query_tokens.len() as f64
 }
 
 fn reciprocal_rank_at_k(results: &[String], expected: &HashSet<String>, k: usize) -> Option<f64> {

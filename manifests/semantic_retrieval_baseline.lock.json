@@ -1,10 +1,10 @@
 {
   "manifest_version": 1,
-  "run_id": "run-20260218T030754Z",
-  "generated_at": "2026-02-18T03:08:40Z",
+  "run_id": "run-20260218T032540Z",
+  "generated_at": "2026-02-18T03:26:37Z",
   "db_schema_version": "0.4.0",
-  "decision_id": null,
-  "change_reason": null,
+  "decision_id": "D-0453",
+  "change_reason": "tuned semantic lexical-signal blend and exact-intent priority",
   "check_ids": [
     "Q-031",
     "Q-032",
@@ -54,7 +54,6 @@
     "exact-probe-022",
     "exact-probe-023",
     "exact-probe-024",
-    "exact-probe-025",
     "exact-ref-001",
     "exact-ref-002",
     "exact-ref-003",
@@ -151,19 +150,19 @@
   "summary_metrics": {
     "q031_chunk_embedding_coverage_ratio": 1.0,
     "q032_stale_embedding_ratio": 0.0,
-    "q033_semantic_ndcg_at_10": 0.4014522021204679,
-    "q034_hybrid_ndcg_uplift_vs_lexical": 0.38957862921686714,
-    "q035_exact_ref_top1_hit_rate": 0.76,
-    "q036_citation_parity_top1": 0.76,
-    "q037_hybrid_p95_latency_ms": 38.023067,
-    "q037_latency_ratio_vs_lexical": 1.3016867637008083,
+    "q033_semantic_ndcg_at_10": 0.6677928148270025,
+    "q034_hybrid_ndcg_uplift_vs_lexical": 0.6530128453075947,
+    "q035_exact_ref_top1_hit_rate": 1.0,
+    "q036_citation_parity_top1": 1.0,
+    "q037_hybrid_p95_latency_ms": 42.949069,
+    "q037_latency_ratio_vs_lexical": 1.4126083172562744,
     "q038_retrieval_determinism_topk_overlap": 1.0,
-    "q045_hybrid_mrr_at_10_first_hit": 0.666861471861472,
-    "q046_hybrid_recall_at_50_delta_vs_lexical": 0.3733333333333334,
-    "q047_judged_at_10_label_completeness": 0.24266666666666661,
-    "q048_ndcg_uplift_p_value": 3.814697265625e-6,
-    "q048_ndcg_uplift_bootstrap_ci_low": 0.26408528202194065,
-    "q048_ndcg_uplift_bootstrap_ci_high": 0.5253603765159013
+    "q045_hybrid_mrr_at_10_first_hit": 0.9401515151515152,
+    "q046_hybrid_recall_at_50_delta_vs_lexical": 0.3866666666666667,
+    "q047_judged_at_10_label_completeness": 0.984,
+    "q048_ndcg_uplift_p_value": 1.4901161193847656e-8,
+    "q048_ndcg_uplift_bootstrap_ci_low": 0.5245706360274899,
+    "q048_ndcg_uplift_bootstrap_ci_high": 0.777448860626259
   },
-  "checksum": "f07f5630b39e7e2f"
+  "checksum": "d23dd256433ec06f"
 }

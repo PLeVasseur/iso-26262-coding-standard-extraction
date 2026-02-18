@@ -220,9 +220,11 @@ fn fill_missing_judged_chunk_ids(
     connection: &Connection,
     manifest: &mut SemanticEvalManifest,
 ) -> Result<bool> {
+    const MIN_JUDGED_LABELS_PER_QUERY: usize = 64;
+
     let mut changed = false;
     for query in &mut manifest.queries {
-        if !query.judged_chunk_ids.is_empty() {
+        if query.judged_chunk_ids.len() >= MIN_JUDGED_LABELS_PER_QUERY {
             continue;
         }
         let Some(seed_chunk_id) = query.expected_chunk_ids.first().cloned() else {
@@ -250,7 +252,7 @@ fn bootstrap_judged_chunk_ids(connection: &Connection, expected_chunk_id: &str) 
           CASE WHEN c.chunk_id = ?1 THEN 0 ELSE 1 END,
           abs(COALESCE(c.page_pdf_start, s.seed_page) - s.seed_page) ASC,
           c.chunk_id ASC
-        LIMIT 10
+        LIMIT 256
         ",
     )?;
 
