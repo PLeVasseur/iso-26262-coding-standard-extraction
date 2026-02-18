@@ -26,6 +26,16 @@ SMOKE_DETERMINISM=1 SMOKE_IDEMPOTENCE=1 scripts/smoke_part6.sh
 
 Use `scripts/refresh_quality_artifacts.sh` to run the phase gate bundle and refresh local run-state artifacts in `.cache/iso26262/manifests/`.
 
+The refresh runbook is now modularized into sourced helpers:
+
+- `scripts/lib/refresh/env.sh`
+- `scripts/lib/refresh/state.sh`
+- `scripts/lib/refresh/compatibility.sh`
+- `scripts/lib/refresh/steps.sh`
+- `scripts/lib/refresh/decisions.sh`
+
+Top-level `scripts/refresh_quality_artifacts.sh` remains the orchestrator for `R00`..`R09` sequencing.
+
 The script now enforces a deterministic runbook flow:
 
 - `R00` branch preflight (mainline mode expects `main`)
@@ -169,3 +179,35 @@ If Stage B reports missing citation parity lockfile, bootstrap once in Stage A:
 ```bash
 WP2_CITATION_BASELINE_MODE=bootstrap WP2_GATE_STAGE=A cargo run -- validate --cache-root .cache/iso26262
 ```
+
+## Maintainability Guardrails
+
+Function-level guardrails are configured in `clippy.toml`:
+
+- `too-many-lines-threshold = 100`
+- `cognitive-complexity-threshold = 25`
+
+Run maintainability checks:
+
+```bash
+cargo clippy --all-targets -- -W clippy::too_many_lines -W clippy::cognitive_complexity
+```
+
+File-size budget checks (`.rs` / `.sh`):
+
+```bash
+scripts/check_file_size_budget.sh
+```
+
+Enforcement mode:
+
+```bash
+MODE=enforce scripts/check_file_size_budget.sh
+```
+
+Budget env overrides:
+
+- `RUST_MAX` (default `500`)
+- `SHELL_MAX` (default `500`)
+- `MODE` (`warn` default, `enforce` to fail on non-exempt breaches)
+- `EXCEPTIONS_FILE` (optional path; defaults to `$OPENCODE_CONFIG_DIR/plans/wp3-modularization-exceptions.md` when available)
