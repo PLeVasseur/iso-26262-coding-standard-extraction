@@ -1,4 +1,10 @@
-fn resolve_chunk_type_filter(raw_values: &[String]) -> HashSet<String> {
+use std::collections::HashSet;
+
+use crate::semantic::chunk_payload_for_embedding;
+
+use super::types::EmbedChunkRow;
+
+pub(super) fn resolve_chunk_type_filter(raw_values: &[String]) -> HashSet<String> {
     raw_values
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
@@ -6,11 +12,11 @@ fn resolve_chunk_type_filter(raw_values: &[String]) -> HashSet<String> {
         .collect::<HashSet<String>>()
 }
 
-fn is_supported_chunk_type(chunk_type: &str) -> bool {
+pub(super) fn is_supported_chunk_type(chunk_type: &str) -> bool {
     matches!(chunk_type, "clause" | "annex" | "table")
 }
 
-fn is_eligible_chunk(
+pub(super) fn is_eligible_chunk(
     chunk_type: &str,
     chunk_type_filter: &HashSet<String>,
     payload: &Option<String>,
@@ -26,7 +32,7 @@ fn is_eligible_chunk(
     payload.is_some()
 }
 
-fn build_chunk_payload(row: &EmbedChunkRow) -> Option<String> {
+pub(super) fn build_chunk_payload(row: &EmbedChunkRow) -> Option<String> {
     chunk_payload_for_embedding(
         &row.chunk_type,
         &row.reference,

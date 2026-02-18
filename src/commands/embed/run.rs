@@ -1,4 +1,34 @@
-pub fn run(args: EmbedArgs) -> Result<()> {
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use anyhow::Result;
+use chrono::Utc;
+use rusqlite::Connection;
+use sha2::{Digest, Sha256};
+use tracing::info;
+
+use crate::cli::{EmbedArgs, EmbedRefreshMode};
+use crate::commands::ingest::ensure_embedding_schema;
+use crate::semantic::{
+    embed_text_local, embedding_text_hash, encode_embedding_blob, resolve_model_config,
+    SemanticModelConfig,
+};
+use crate::util::{ensure_directory, now_utc_string, utc_compact_string, write_json_pretty};
+
+use super::payload::{
+    build_chunk_payload, is_eligible_chunk, is_supported_chunk_type, resolve_chunk_type_filter,
+};
+use super::store::{
+    ensure_model_entry, load_chunk_rows, load_existing_embedding, open_embed_connection,
+    upsert_chunk_embedding,
+};
+use super::types::{
+    EmbedChunkRow, EmbeddingRunManifest, SemanticModelConfigLock, EMBEDDING_DB_SCHEMA_VERSION,
+    SEMANTIC_MODEL_CONFIG_LOCK_PATH,
+};
+
+pub(crate) fn run(args: EmbedArgs) -> Result<()> {
     let batch_size = args.batch_size.max(1);
     let model = resolve_model_config(&args.model_id);
     let chunk_type_filter = resolve_chunk_type_filter(&args.chunk_types);

@@ -1,4 +1,14 @@
-fn open_embed_connection(db_path: &PathBuf) -> Result<Connection> {
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use rusqlite::{params, Connection, OpenFlags};
+
+use crate::semantic::SemanticModelConfig;
+use crate::util::now_utc_string;
+
+use super::types::{EmbedChunkRow, ExistingEmbeddingRow};
+
+pub(super) fn open_embed_connection(db_path: &PathBuf) -> Result<Connection> {
     let connection = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -20,7 +30,10 @@ fn open_embed_connection(db_path: &PathBuf) -> Result<Connection> {
     Ok(connection)
 }
 
-fn ensure_model_entry(connection: &Connection, model: &SemanticModelConfig) -> Result<()> {
+pub(super) fn ensure_model_entry(
+    connection: &Connection,
+    model: &SemanticModelConfig,
+) -> Result<()> {
     let created_at = now_utc_string();
     let config_json = serde_json::json!({
         "model_id": model.model_id,
@@ -55,7 +68,7 @@ fn ensure_model_entry(connection: &Connection, model: &SemanticModelConfig) -> R
     Ok(())
 }
 
-fn load_chunk_rows(connection: &Connection) -> Result<Vec<EmbedChunkRow>> {
+pub(super) fn load_chunk_rows(connection: &Connection) -> Result<Vec<EmbedChunkRow>> {
     let mut statement = connection.prepare(
         "
         SELECT
@@ -87,7 +100,7 @@ fn load_chunk_rows(connection: &Connection) -> Result<Vec<EmbedChunkRow>> {
     Ok(out)
 }
 
-fn load_existing_embedding(
+pub(super) fn load_existing_embedding(
     connection: &Connection,
     chunk_id: &str,
     model_id: &str,
@@ -113,7 +126,7 @@ fn load_existing_embedding(
     Ok(row)
 }
 
-fn upsert_chunk_embedding(
+pub(super) fn upsert_chunk_embedding(
     connection: &Connection,
     chunk_id: &str,
     model_id: &str,
