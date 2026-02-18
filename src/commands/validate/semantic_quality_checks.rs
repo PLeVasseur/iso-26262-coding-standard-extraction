@@ -107,6 +107,17 @@ fn build_semantic_quality_assessment(
     );
 
     assessment.summary = quality.summary;
+    append_pinpoint_quality_assessment(
+        connection,
+        manifest_dir,
+        run_id,
+        stage,
+        semantic_embeddings,
+        &eval_manifest,
+        &mut assessment.summary,
+        &mut assessment.checks,
+        &mut assessment.recommendations,
+    )?;
     Ok(assessment)
 }
 
@@ -475,26 +486,5 @@ fn append_semantic_retrieval_checks(
                 "Improve statistical confidence for nDCG uplift (Q-048) so p-value and CI satisfy Stage B thresholds.".to_string(),
             );
         }
-    }
-}
-
-fn stage_metric_check(
-    check_id: &str,
-    name: &str,
-    stage: Wp2GateStage,
-    metric: Option<f64>,
-    hard_fail: bool,
-    stage_b_fail: bool,
-) -> QualityCheck {
-    let result = if metric.is_none() {
-        "pending".to_string()
-    } else {
-        wp2_result(stage, hard_fail, stage_b_fail).to_string()
-    };
-
-    QualityCheck {
-        check_id: check_id.to_string(),
-        name: name.to_string(),
-        result,
     }
 }

@@ -91,6 +91,17 @@ struct SemanticQualitySummaryReport {
     ndcg_uplift_p_value: Option<f64>,
     ndcg_uplift_bootstrap_ci_low: Option<f64>,
     ndcg_uplift_bootstrap_ci_high: Option<f64>,
+    pinpoint_eval_manifest: Option<String>,
+    pinpoint_quality_report_path: Option<String>,
+    pinpoint_total_queries: usize,
+    pinpoint_table_queries: usize,
+    pinpoint_high_confidence_queries: usize,
+    pinpoint_at_1_relevance: Option<f64>,
+    pinpoint_table_row_accuracy_at_1: Option<f64>,
+    pinpoint_citation_anchor_mismatch_count: Option<f64>,
+    pinpoint_fallback_ratio: Option<f64>,
+    pinpoint_determinism_top1: Option<f64>,
+    pinpoint_latency_overhead_p95_ms: Option<f64>,
     baseline_path: String,
     baseline_mode: String,
     baseline_run_id: Option<String>,
@@ -175,6 +186,82 @@ struct SemanticQualityQueryResult {
     exact_top1_hit_hybrid: Option<bool>,
     citation_top1_match_lexical_vs_hybrid: Option<bool>,
     determinism_top10_overlap: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PinpointEvalManifest {
+    manifest_version: u32,
+    generated_at: String,
+    source: String,
+    queries: Vec<PinpointEvalQuery>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PinpointEvalQuery {
+    query_id: String,
+    query_text: String,
+    parent_expected_chunk_ids: Vec<String>,
+    #[serde(default)]
+    expected_unit_ids: Vec<String>,
+    #[serde(default)]
+    expected_token_sets: Vec<Vec<String>>,
+    #[serde(default)]
+    expected_row_keys: Vec<String>,
+    high_confidence: bool,
+    intent: String,
+    #[serde(default)]
+    part_filter: Option<u32>,
+    #[serde(default)]
+    chunk_type_filter: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PinpointQualityArtifact {
+    manifest_version: u32,
+    run_id: String,
+    generated_at: String,
+    source_eval_manifest: String,
+    summary: PinpointQualitySummary,
+    query_results: Vec<PinpointQualityQueryResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct PinpointQualitySummary {
+    source_eval_manifest: Option<String>,
+    quality_report_path: Option<String>,
+    total_queries: usize,
+    table_queries: usize,
+    high_confidence_queries: usize,
+    pinpoint_at_1_relevance: Option<f64>,
+    table_row_accuracy_at_1: Option<f64>,
+    citation_anchor_mismatch_count: usize,
+    fallback_ratio: Option<f64>,
+    determinism_top1: Option<f64>,
+    latency_overhead_p95_ms: Option<f64>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PinpointQualityQueryResult {
+    query_id: String,
+    intent: String,
+    query_text: String,
+    parent_chunk_id: Option<String>,
+    top_unit_id: Option<String>,
+    top_unit_type: Option<String>,
+    top_unit_text: Option<String>,
+    top_row_key: Option<String>,
+    top_unit_score: Option<f64>,
+    relevance_hit_at_1: Option<bool>,
+    row_accuracy_hit_at_1: Option<bool>,
+    citation_anchor_compatible: Option<bool>,
+    fallback_used: bool,
+    determinism_top1_match: Option<bool>,
+    latency_without_pinpoint_ms: f64,
+    latency_with_pinpoint_ms: f64,
+    latency_overhead_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

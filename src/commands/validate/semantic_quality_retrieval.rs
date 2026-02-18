@@ -177,8 +177,9 @@ fn semantic_eval_semantic_hits(
         return Ok(Vec::new());
     }
 
-    let query_embedding = crate::semantic::embed_text_local(query_text, embedding_dim);
-    let query_tokens = query_signal_tokens(query_text);
+    let semantic_query_text = semantic_embedding_query_text(query_text);
+    let query_embedding = crate::semantic::embed_text_local(&semantic_query_text, embedding_dim);
+    let query_tokens = query_signal_tokens(&semantic_query_text);
     let mut statement = connection.prepare(
         "
         SELECT
@@ -224,7 +225,7 @@ fn semantic_eval_semantic_hits(
             row.get::<_, String>(2)?.as_str(),
             row.get::<_, String>(3)?.as_str(),
         );
-        let score = semantic_score * 0.55 + lexical_bonus * 0.45;
+        let score = semantic_score * 0.45 + lexical_bonus * 0.55;
         hits.push(SemanticRetrievedHit {
             chunk_id: row.get(0)?,
             reference: row.get(1)?,
@@ -264,24 +265,55 @@ fn semantic_hit_identity(hit: &SemanticRetrievedHit) -> String {
     )
 }
 
-fn ndcg_at_k(results: &[String], expected: &HashSet<String>, k: usize) -> Option<f64> {
-    if expected.is_empty() || k == 0 {
+fn ndcg_at_k(
+    results: &[String],
+    expected: &HashSet<String>,
+    judged: &HashSet<String>,
+    k: usize,
+) -> Option<f64> {
+    if (expected.is_empty() && judged.is_empty()) || k == 0 {
         return None;
     }
 
     let cutoff = results.len().min(k);
     let mut dcg = 0.0;
     for (index, chunk_id) in results.iter().take(cutoff).enumerate() {
-        if expected.contains(chunk_id) {
-            let rank = index + 1;
-            dcg += 1.0 / ((rank as f64 + 1.0).log2());
+        let relevance = if expected.contains(chunk_id) {
+            2.0
+        } else if judged.contains(chunk_id) {
+            1.0
+        } else {
+            0.0
+        };
+        if relevance <= 0.0 {
+            continue;
         }
+
+        let rank = index + 1;
+        let gain = 2f64.powf(relevance) - 1.0;
+        dcg += gain / ((rank as f64 + 1.0).log2());
     }
 
-    let ideal_hits = expected.len().min(k);
+    let judged_only = judged
+        .iter()
+        .filter(|chunk_id| !expected.contains(*chunk_id))
+        .count();
+    let mut ideal_relevances = vec![2.0; expected.len()];
+    ideal_relevances.extend(std::iter::repeat(1.0).take(judged_only));
+    if ideal_relevances.is_empty() {
+        return None;
+    }
+    ideal_relevances.sort_by(|left, right| {
+        right
+            .partial_cmp(left)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     let mut idcg = 0.0;
-    for rank in 1..=ideal_hits {
-        idcg += 1.0 / ((rank as f64 + 1.0).log2());
+    for (index, relevance) in ideal_relevances.into_iter().take(k).enumerate() {
+        let rank = index + 1;
+        let gain = 2f64.powf(relevance) - 1.0;
+        idcg += gain / ((rank as f64 + 1.0).log2());
     }
     if idcg <= 0.0 {
         return None;
@@ -352,6 +384,38 @@ fn query_signal_tokens(query_text: &str) -> Vec<String> {
     tokens
 }
 
+fn semantic_embedding_query_text(query_text: &str) -> String {
+    const NOISE_PREFIXES: &[&str] = &[
+        "concept guidance for ",
+        "requirements concerning ",
+        "requirements regarding ",
+        "requirements for ",
+        "guidance for ",
+    ];
+
+    let normalized = query_text
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if normalized.is_empty() {
+        return normalized;
+    }
+
+    let lowered = normalized.to_ascii_lowercase();
+    for prefix in NOISE_PREFIXES {
+        if lowered.starts_with(prefix) {
+            let stripped = normalized[prefix.len()..].trim();
+            if !stripped.is_empty() {
+                return stripped.to_string();
+            }
+        }
+    }
+
+    normalized
+}
+
 fn lexical_signal_bonus(query_tokens: &[String], reference: &str, heading: &str, text: &str) -> f64 {
     if query_tokens.is_empty() {
         return 0.0;
@@ -413,7 +477,6 @@ fn judged_at_k(results: &[String], judged: &HashSet<String>, k: usize) -> Option
         .count();
     Some(judged_in_top_k as f64 / k as f64)
 }
-
 fn percentile(values: &[f64], quantile: f64) -> Option<f64> {
     if values.is_empty() {
         return None;

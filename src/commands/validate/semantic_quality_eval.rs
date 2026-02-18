@@ -256,6 +256,17 @@ fn compute_semantic_eval_quality(
         ndcg_uplift_p_value,
         ndcg_uplift_bootstrap_ci_low,
         ndcg_uplift_bootstrap_ci_high,
+        pinpoint_eval_manifest: None,
+        pinpoint_quality_report_path: None,
+        pinpoint_total_queries: 0,
+        pinpoint_table_queries: 0,
+        pinpoint_high_confidence_queries: 0,
+        pinpoint_at_1_relevance: None,
+        pinpoint_table_row_accuracy_at_1: None,
+        pinpoint_citation_anchor_mismatch_count: None,
+        pinpoint_fallback_ratio: None,
+        pinpoint_determinism_top1: None,
+        pinpoint_latency_overhead_p95_ms: None,
         baseline_path: String::new(),
         baseline_mode: String::new(),
         baseline_run_id: None,
@@ -431,9 +442,9 @@ fn evaluate_semantic_query(
         .map(|hit| hit.chunk_id.clone())
         .collect::<Vec<String>>();
 
-    let lexical_ndcg = ndcg_at_k(&lexical_ids, &expected, SEMANTIC_TOP_K);
-    let semantic_ndcg = ndcg_at_k(&semantic_ids, &expected, SEMANTIC_TOP_K);
-    let hybrid_ndcg = ndcg_at_k(&hybrid_ids, &expected, SEMANTIC_TOP_K);
+    let lexical_ndcg = ndcg_at_k(&lexical_ids, &expected, &judged, SEMANTIC_TOP_K);
+    let semantic_ndcg = ndcg_at_k(&semantic_ids, &expected, &judged, SEMANTIC_TOP_K);
+    let hybrid_ndcg = ndcg_at_k(&hybrid_ids, &expected, &judged, SEMANTIC_TOP_K);
     let hybrid_rr_at_10 = reciprocal_rank_at_k(&hybrid_ids, &expected, SEMANTIC_TOP_K);
     let lexical_recall_at_50 = recall_at_k(&lexical_ids, &expected, 50);
     let hybrid_recall_at_50 = recall_at_k(&hybrid_ids, &expected, 50);
