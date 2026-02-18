@@ -341,13 +341,13 @@ Run maintainability checks:
 cargo clippy --all-targets -- -W clippy::too_many_lines -W clippy::cognitive_complexity
 ```
 
-File-size budget checks (`.rs` / `.sh`):
+File-size budget checks (`.rs` / `.sh`) are advisory by default and act as a maintainability review signal, not an automatic split trigger:
 
 ```bash
 scripts/check_file_size_budget.sh
 ```
 
-Enforcement mode:
+Optional enforcement mode (for explicit hard-gate contexts):
 
 ```bash
 MODE=enforce scripts/check_file_size_budget.sh
@@ -357,5 +357,23 @@ Budget env overrides:
 
 - `RUST_MAX` (default `500`)
 - `SHELL_MAX` (default `500`)
-- `MODE` (`warn` default, `enforce` to fail on non-exempt breaches)
+- `MODE` (`warn` default, advisory-first; `enforce` to fail on non-exempt breaches)
 - `EXCEPTIONS_FILE` (optional path; defaults to `$OPENCODE_CONFIG_DIR/plans/wp3-modularization-exceptions.md` when available)
+
+Large cohesive modules are acceptable when domain boundaries are clear; record rationale in planning notes when keeping a file above default thresholds.
+
+## Module and File Naming
+
+Use domain ownership naming for modules and files under `src/commands/**`.
+
+Do:
+
+- Prefer names that describe one concern (`metrics`, `checks`, `citation`, `table_parsing`, `output`)
+- Keep command entrypoints thin and orchestrator-focused (`run.rs`, command `mod.rs`)
+- Use facades (`mod.rs`) to curate exports while keeping submodules private by default
+
+Avoid:
+
+- Sequence naming such as `*_part1.rs` / `*_part2.rs`
+- Mixed-concern connector naming such as `*_and_*.rs` when boundaries can be split
+- Introducing `include!()` as long-term module composition
