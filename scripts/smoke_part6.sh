@@ -5,6 +5,7 @@ CACHE_ROOT="${CACHE_ROOT:-.cache/iso26262}"
 PART="${PART:-6}"
 MAX_PAGES="${MAX_PAGES:-60}"
 SEMANTIC_MODEL_ID="${SEMANTIC_MODEL_ID:-miniLM-L6-v2-local-v1}"
+EMBED_LOCKFILE_PATH="${EMBED_LOCKFILE_PATH:-}"
 SMOKE_IDEMPOTENCE="${SMOKE_IDEMPOTENCE:-0}"
 SMOKE_DETERMINISM="${SMOKE_DETERMINISM:-0}"
 
@@ -113,7 +114,17 @@ MANIFEST_DIR="${CACHE_ROOT}/manifests"
 REPORT_PATH="${MANIFEST_DIR}/extraction_quality_report.json"
 
 "$BIN_PATH" ingest --cache-root "$CACHE_ROOT" --target-part "$PART" --max-pages-per-doc "$MAX_PAGES"
-"$BIN_PATH" embed --cache-root "$CACHE_ROOT" --model-id "$SEMANTIC_MODEL_ID" --refresh-mode missing-or-stale --batch-size 64
+embed_args=(
+  "$BIN_PATH" embed
+  --cache-root "$CACHE_ROOT"
+  --model-id "$SEMANTIC_MODEL_ID"
+  --refresh-mode missing-or-stale
+  --batch-size 64
+)
+if [[ -n "$EMBED_LOCKFILE_PATH" ]]; then
+  embed_args+=(--semantic-model-lock-path "$EMBED_LOCKFILE_PATH")
+fi
+"${embed_args[@]}"
 "$BIN_PATH" validate --cache-root "$CACHE_ROOT"
 
 if [[ ! -f "$REPORT_PATH" ]]; then

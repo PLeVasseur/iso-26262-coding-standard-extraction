@@ -113,6 +113,9 @@ pub struct EmbedArgs {
 
     #[arg(long = "chunk-type")]
     pub chunk_types: Vec<String>,
+
+    #[arg(long)]
+    pub semantic_model_lock_path: Option<PathBuf>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]

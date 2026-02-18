@@ -9,11 +9,15 @@ pub fn run(args: EmbedArgs) -> Result<()> {
         .unwrap_or_else(|| args.cache_root.join("iso26262_index.sqlite"));
     let manifest_dir = args.cache_root.join("manifests");
     ensure_directory(&manifest_dir)?;
+    let semantic_model_lock_path = args
+        .semantic_model_lock_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(SEMANTIC_MODEL_CONFIG_LOCK_PATH));
 
     let mut connection = open_embed_connection(&db_path)?;
     ensure_embedding_schema(&connection)?;
     ensure_model_entry(&connection, &model)?;
-    write_semantic_model_config_lockfile(&model)?;
+    write_semantic_model_config_lockfile(&model, &semantic_model_lock_path)?;
 
     let chunk_rows = load_chunk_rows(&connection)?;
     let started_at = now_utc_string();
@@ -165,7 +169,10 @@ pub fn run(args: EmbedArgs) -> Result<()> {
     Ok(())
 }
 
-fn write_semantic_model_config_lockfile(model: &SemanticModelConfig) -> Result<()> {
+fn write_semantic_model_config_lockfile(
+    model: &SemanticModelConfig,
+    lock_path: &Path,
+) -> Result<()> {
     let created_at = now_utc_string();
     let checksum_input = format!(
         "{}|{}|{}|{}|{}",
@@ -186,7 +193,13 @@ fn write_semantic_model_config_lockfile(model: &SemanticModelConfig) -> Result<(
         checksum,
     };
 
-    write_json_pretty(&PathBuf::from(SEMANTIC_MODEL_CONFIG_LOCK_PATH), &lock)
+    if let Some(parent) = lock_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            ensure_directory(parent)?;
+        }
+    }
+
+    write_json_pretty(lock_path, &lock)
 }
 
 fn flush_embed_batch(

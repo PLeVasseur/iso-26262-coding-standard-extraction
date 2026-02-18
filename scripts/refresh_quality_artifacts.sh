@@ -8,6 +8,7 @@ FULL_TARGET_SET="${FULL_TARGET_SET:-0}"
 TARGET_PARTS="${TARGET_PARTS:-2 6 8 9}"
 FULL_MAX_PAGES="${FULL_MAX_PAGES:-0}"
 SEMANTIC_MODEL_ID="${SEMANTIC_MODEL_ID:-miniLM-L6-v2-local-v1}"
+EMBED_LOCKFILE_PATH="${EMBED_LOCKFILE_PATH:-}"
 PHASE_ID="${PHASE_ID:-phase-8}"
 PHASE_NAME="${PHASE_NAME:-Phase 8 - Deterministic runbook and crash recovery}"
 BASE_BRANCH="${BASE_BRANCH:-main}"
@@ -133,7 +134,17 @@ if should_run_step "R06-VALIDATE"; then
   write_running_state "$CURRENT_STEP" "$NEXT_PLANNED_COMMAND"
   cargo run -- query --cache-root "$CACHE_ROOT" --query "9.1" --part "$PART" --with-ancestors --with-descendants --json --limit 3 >/dev/null
   cargo run -- query --cache-root "$CACHE_ROOT" --query "Table 3" --part "$PART" --with-ancestors --with-descendants --json --limit 1 >/dev/null
-  cargo run -- embed --cache-root "$CACHE_ROOT" --model-id "$SEMANTIC_MODEL_ID" --refresh-mode missing-or-stale --batch-size 64
+  embed_cmd=(
+    cargo run -- embed
+    --cache-root "$CACHE_ROOT"
+    --model-id "$SEMANTIC_MODEL_ID"
+    --refresh-mode missing-or-stale
+    --batch-size 64
+  )
+  if [[ -n "$EMBED_LOCKFILE_PATH" ]]; then
+    embed_cmd+=(--semantic-model-lock-path "$EMBED_LOCKFILE_PATH")
+  fi
+  "${embed_cmd[@]}"
   cargo run -- validate --cache-root "$CACHE_ROOT"
 
   if [[ ! -f "$REPORT_PATH" ]]; then
