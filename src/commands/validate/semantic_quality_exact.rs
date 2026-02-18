@@ -1,10 +1,12 @@
+use super::*;
+
 #[derive(Debug, Clone)]
-struct ExactIntentProbeEvaluation {
-    query: SemanticEvalQuery,
-    eval: QueryEvalRecord,
+pub struct ExactIntentProbeEvaluation {
+    pub query: SemanticEvalQuery,
+    pub eval: QueryEvalRecord,
 }
 
-fn evaluate_exact_intent_probes(
+pub fn evaluate_exact_intent_probes(
     connection: &Connection,
     refs: &[GoldReference],
     model_id: &str,
@@ -21,7 +23,7 @@ fn evaluate_exact_intent_probes(
     Ok(out)
 }
 
-fn build_exact_intent_probe_queries(
+pub fn build_exact_intent_probe_queries(
     connection: &Connection,
     refs: &[GoldReference],
 ) -> Result<Vec<SemanticEvalQuery>> {
@@ -68,7 +70,7 @@ fn build_exact_intent_probe_queries(
     Ok(queries)
 }
 
-fn is_high_confidence_exact_probe(
+pub fn is_high_confidence_exact_probe(
     connection: &Connection,
     doc_id: &str,
     reference: &str,

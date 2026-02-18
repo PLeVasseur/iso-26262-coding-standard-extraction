@@ -1,20 +1,22 @@
-const WP3_SEMANTIC_BASELINE_MODE_ENV: &str = "WP3_SEMANTIC_BASELINE_MODE";
-const WP3_SEMANTIC_BASELINE_PATH_ENV: &str = "WP3_SEMANTIC_BASELINE_PATH";
-const WP3_SEMANTIC_BASELINE_DECISION_ENV: &str = "WP3_SEMANTIC_BASELINE_DECISION_ID";
-const WP3_SEMANTIC_BASELINE_REASON_ENV: &str = "WP3_SEMANTIC_BASELINE_REASON";
+use super::*;
+
+pub const WP3_SEMANTIC_BASELINE_MODE_ENV: &str = "WP3_SEMANTIC_BASELINE_MODE";
+pub const WP3_SEMANTIC_BASELINE_PATH_ENV: &str = "WP3_SEMANTIC_BASELINE_PATH";
+pub const WP3_SEMANTIC_BASELINE_DECISION_ENV: &str = "WP3_SEMANTIC_BASELINE_DECISION_ID";
+pub const WP3_SEMANTIC_BASELINE_REASON_ENV: &str = "WP3_SEMANTIC_BASELINE_REASON";
 
 #[derive(Debug)]
-struct SemanticBaselineComputation {
-    baseline_path: String,
-    baseline_mode: String,
-    baseline_run_id: Option<String>,
-    baseline_checksum: Option<String>,
-    baseline_created: bool,
-    baseline_missing: bool,
-    warnings: Vec<String>,
+pub struct SemanticBaselineComputation {
+    pub baseline_path: String,
+    pub baseline_mode: String,
+    pub baseline_run_id: Option<String>,
+    pub baseline_checksum: Option<String>,
+    pub baseline_created: bool,
+    pub baseline_missing: bool,
+    pub warnings: Vec<String>,
 }
 
-fn apply_semantic_retrieval_baseline_governance(
+pub fn apply_semantic_retrieval_baseline_governance(
     stage: Wp2GateStage,
     run_id: &str,
     semantic_embeddings: &SemanticEmbeddingReport,
@@ -133,7 +135,7 @@ fn apply_semantic_retrieval_baseline_governance(
     })
 }
 
-fn resolve_semantic_baseline_mode() -> SemanticBaselineMode {
+pub fn resolve_semantic_baseline_mode() -> SemanticBaselineMode {
     parse_semantic_baseline_mode(
         std::env::var(WP3_SEMANTIC_BASELINE_MODE_ENV)
             .ok()
@@ -141,7 +143,7 @@ fn resolve_semantic_baseline_mode() -> SemanticBaselineMode {
     )
 }
 
-fn parse_semantic_baseline_mode(value: Option<&str>) -> SemanticBaselineMode {
+pub fn parse_semantic_baseline_mode(value: Option<&str>) -> SemanticBaselineMode {
     match value {
         Some(value)
             if value.trim().eq_ignore_ascii_case("bootstrap")
@@ -153,7 +155,7 @@ fn parse_semantic_baseline_mode(value: Option<&str>) -> SemanticBaselineMode {
     }
 }
 
-fn resolve_semantic_baseline_path() -> PathBuf {
+pub fn resolve_semantic_baseline_path() -> PathBuf {
     parse_semantic_baseline_path(
         std::env::var(WP3_SEMANTIC_BASELINE_PATH_ENV)
             .ok()
@@ -161,7 +163,7 @@ fn resolve_semantic_baseline_path() -> PathBuf {
     )
 }
 
-fn parse_semantic_baseline_path(value: Option<&str>) -> PathBuf {
+pub fn parse_semantic_baseline_path(value: Option<&str>) -> PathBuf {
     if let Some(value) = value {
         let candidate = value.trim();
         if !candidate.is_empty() {
@@ -171,7 +173,7 @@ fn parse_semantic_baseline_path(value: Option<&str>) -> PathBuf {
     PathBuf::from("manifests").join("semantic_retrieval_baseline.lock.json")
 }
 
-fn resolve_semantic_baseline_rationale() -> (Option<String>, Option<String>) {
+pub fn resolve_semantic_baseline_rationale() -> (Option<String>, Option<String>) {
     let decision_id = std::env::var(WP3_SEMANTIC_BASELINE_DECISION_ENV)
         .ok()
         .map(|value| value.trim().to_string())
@@ -183,7 +185,7 @@ fn resolve_semantic_baseline_rationale() -> (Option<String>, Option<String>) {
     (decision_id, reason)
 }
 
-fn write_semantic_retrieval_lockfile(path: &Path, baseline: &SemanticRetrievalBaseline) -> Result<()> {
+pub fn write_semantic_retrieval_lockfile(path: &Path, baseline: &SemanticRetrievalBaseline) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -193,7 +195,7 @@ fn write_semantic_retrieval_lockfile(path: &Path, baseline: &SemanticRetrievalBa
     write_json_pretty(path, baseline)
 }
 
-fn read_semantic_retrieval_lockfile(path: &Path) -> Result<SemanticRetrievalBaseline> {
+pub fn read_semantic_retrieval_lockfile(path: &Path) -> Result<SemanticRetrievalBaseline> {
     let raw = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let parsed = serde_json::from_slice::<serde_json::Value>(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
@@ -202,7 +204,7 @@ fn read_semantic_retrieval_lockfile(path: &Path) -> Result<SemanticRetrievalBase
         .with_context(|| format!("failed to decode {}", path.display()))
 }
 
-fn ensure_semantic_baseline_metadata_only(value: &serde_json::Value) -> Result<()> {
+pub fn ensure_semantic_baseline_metadata_only(value: &serde_json::Value) -> Result<()> {
     const FORBIDDEN_KEYS: &[&str] = &[
         "text",
         "snippet",
@@ -246,7 +248,7 @@ fn ensure_semantic_baseline_metadata_only(value: &serde_json::Value) -> Result<(
     Ok(())
 }
 
-fn semantic_retrieval_check_ids() -> Vec<String> {
+pub fn semantic_retrieval_check_ids() -> Vec<String> {
     [
         "Q-031", "Q-032", "Q-033", "Q-034", "Q-035", "Q-036", "Q-037", "Q-038",
         "Q-045", "Q-046", "Q-047", "Q-048",
@@ -256,7 +258,7 @@ fn semantic_retrieval_check_ids() -> Vec<String> {
     .collect()
 }
 
-fn semantic_retrieval_thresholds() -> SemanticRetrievalBaselineThresholds {
+pub fn semantic_retrieval_thresholds() -> SemanticRetrievalBaselineThresholds {
     SemanticRetrievalBaselineThresholds {
         q031_stage_a_min: WP3_EMBEDDING_COVERAGE_STAGE_A_MIN,
         q031_stage_b_min: WP3_EMBEDDING_COVERAGE_STAGE_B_MIN,
@@ -286,7 +288,7 @@ fn semantic_retrieval_thresholds() -> SemanticRetrievalBaselineThresholds {
     }
 }
 
-fn semantic_retrieval_metrics(
+pub fn semantic_retrieval_metrics(
     semantic_embeddings: &SemanticEmbeddingReport,
     summary: &SemanticQualitySummaryReport,
 ) -> SemanticRetrievalBaselineMetrics {
@@ -309,7 +311,7 @@ fn semantic_retrieval_metrics(
     }
 }
 
-fn checksum_semantic_baseline_payload(
+pub fn checksum_semantic_baseline_payload(
     check_ids: &[String],
     query_ids: &[String],
     thresholds: &SemanticRetrievalBaselineThresholds,

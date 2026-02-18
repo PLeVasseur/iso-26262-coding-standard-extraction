@@ -1,24 +1,26 @@
-fn resolve_wp2_gate_stage() -> Wp2GateStage {
+use super::*;
+
+pub fn resolve_wp2_gate_stage() -> Wp2GateStage {
     match std::env::var("WP2_GATE_STAGE") {
         Ok(value) if value.trim().eq_ignore_ascii_case("B") => Wp2GateStage::B,
         _ => Wp2GateStage::A,
     }
 }
-fn resolve_citation_baseline_mode() -> CitationBaselineMode {
+pub fn resolve_citation_baseline_mode() -> CitationBaselineMode {
     parse_citation_baseline_mode(
         std::env::var(WP2_CITATION_BASELINE_MODE_ENV)
             .ok()
             .as_deref(),
     )
 }
-fn resolve_citation_baseline_path() -> PathBuf {
+pub fn resolve_citation_baseline_path() -> PathBuf {
     parse_citation_baseline_path(
         std::env::var(WP2_CITATION_BASELINE_PATH_ENV)
             .ok()
             .as_deref(),
     )
 }
-fn parse_citation_baseline_mode(value: Option<&str>) -> CitationBaselineMode {
+pub fn parse_citation_baseline_mode(value: Option<&str>) -> CitationBaselineMode {
     match value {
         Some(value)
             if value.trim().eq_ignore_ascii_case("bootstrap")
@@ -30,7 +32,7 @@ fn parse_citation_baseline_mode(value: Option<&str>) -> CitationBaselineMode {
     }
 }
 
-fn parse_citation_baseline_path(value: Option<&str>) -> PathBuf {
+pub fn parse_citation_baseline_path(value: Option<&str>) -> PathBuf {
     if let Some(value) = value {
         let candidate = value.trim();
         if !candidate.is_empty() {
@@ -42,7 +44,7 @@ fn parse_citation_baseline_path(value: Option<&str>) -> PathBuf {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_wp2_assessment(
+pub fn build_wp2_assessment(
     connection: &Connection,
     manifest_dir: &Path,
     run_id: &str,

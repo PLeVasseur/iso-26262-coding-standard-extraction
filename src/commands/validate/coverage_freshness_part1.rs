@@ -1,4 +1,6 @@
-fn load_page_provenance_entries(
+use super::*;
+
+pub fn load_page_provenance_entries(
     manifest_dir: &Path,
     snapshot: Option<&NamedIngestRunSnapshot>,
 ) -> Result<Vec<PageProvenanceEntry>> {
@@ -29,14 +31,14 @@ fn load_page_provenance_entries(
     Ok(manifest.entries)
 }
 
-fn load_gold_manifest(path: &Path) -> Result<GoldSetManifest> {
+pub fn load_gold_manifest(path: &Path) -> Result<GoldSetManifest> {
     let raw = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let manifest: GoldSetManifest = serde_json::from_slice(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(manifest)
 }
 
-fn resolve_run_id(manifest_dir: &Path, fallback: &str) -> String {
+pub fn resolve_run_id(manifest_dir: &Path, fallback: &str) -> String {
     let latest_ingest_run_id = load_latest_ingest_run_id(manifest_dir).ok().flatten();
 
     let run_state_path = manifest_dir.join("run_state.json");
@@ -50,7 +52,7 @@ fn resolve_run_id(manifest_dir: &Path, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn load_target_sections_manifest(manifest_dir: &Path) -> Result<Option<TargetSectionsManifest>> {
+pub fn load_target_sections_manifest(manifest_dir: &Path) -> Result<Option<TargetSectionsManifest>> {
     let target_sections_path = manifest_dir.join("target_sections.json");
     if !target_sections_path.exists() {
         return Ok(None);
@@ -64,7 +66,7 @@ fn load_target_sections_manifest(manifest_dir: &Path) -> Result<Option<TargetSec
     Ok(Some(manifest))
 }
 
-fn build_target_coverage_report(
+pub fn build_target_coverage_report(
     target_sections: &Option<TargetSectionsManifest>,
     refs: &[GoldReference],
 ) -> TargetCoverageReport {
@@ -134,7 +136,7 @@ fn build_target_coverage_report(
     }
 }
 
-fn build_freshness_report(
+pub fn build_freshness_report(
     manifest_dir: &Path,
     target_sections: &Option<TargetSectionsManifest>,
 ) -> Result<FreshnessReport> {
@@ -203,7 +205,7 @@ fn build_freshness_report(
     })
 }
 
-fn required_target_parts(manifest: &TargetSectionsManifest) -> Vec<u32> {
+pub fn required_target_parts(manifest: &TargetSectionsManifest) -> Vec<u32> {
     let mut parts = manifest
         .targets
         .iter()
@@ -214,7 +216,7 @@ fn required_target_parts(manifest: &TargetSectionsManifest) -> Vec<u32> {
     parts
 }
 
-fn load_ingest_snapshots(manifest_dir: &Path) -> Result<Vec<NamedIngestRunSnapshot>> {
+pub fn load_ingest_snapshots(manifest_dir: &Path) -> Result<Vec<NamedIngestRunSnapshot>> {
     let mut snapshots = Vec::<NamedIngestRunSnapshot>::new();
 
     for entry in fs::read_dir(manifest_dir)? {
@@ -240,7 +242,7 @@ fn load_ingest_snapshots(manifest_dir: &Path) -> Result<Vec<NamedIngestRunSnapsh
     Ok(snapshots)
 }
 
-fn resolve_processed_parts(snapshot: &IngestRunSnapshot, required_parts: &[u32]) -> Vec<u32> {
+pub fn resolve_processed_parts(snapshot: &IngestRunSnapshot, required_parts: &[u32]) -> Vec<u32> {
     let mut processed_parts = if !snapshot.processed_parts.is_empty() {
         snapshot.processed_parts.clone()
     } else {
@@ -256,7 +258,7 @@ fn resolve_processed_parts(snapshot: &IngestRunSnapshot, required_parts: &[u32])
     processed_parts
 }
 
-fn parse_target_parts_from_command(command: &str) -> Vec<u32> {
+pub fn parse_target_parts_from_command(command: &str) -> Vec<u32> {
     let mut parts = Vec::<u32>::new();
     let mut tokens = command.split_whitespace().peekable();
 
@@ -279,7 +281,7 @@ fn parse_target_parts_from_command(command: &str) -> Vec<u32> {
     parts
 }
 
-fn load_latest_ingest_run_id(manifest_dir: &Path) -> Result<Option<String>> {
+pub fn load_latest_ingest_run_id(manifest_dir: &Path) -> Result<Option<String>> {
     let mut latest_manifest_path: Option<PathBuf> = None;
     let mut latest_manifest_name: Option<String> = None;
 
@@ -314,7 +316,7 @@ fn load_latest_ingest_run_id(manifest_dir: &Path) -> Result<Option<String>> {
         .filter(|value| !value.is_empty()))
 }
 
-fn load_table_quality_scorecard(manifest_dir: &Path) -> Result<TableQualityScorecard> {
+pub fn load_table_quality_scorecard(manifest_dir: &Path) -> Result<TableQualityScorecard> {
     let mut latest_manifest: Option<(String, PathBuf)> = None;
 
     for entry in fs::read_dir(manifest_dir)? {

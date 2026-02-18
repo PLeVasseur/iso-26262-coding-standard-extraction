@@ -1,10 +1,10 @@
-const PINPOINT_EVAL_MANIFEST_FILENAME: &str = "pinpoint_eval_queries.json";
-const PINPOINT_QUALITY_REPORT_FILENAME: &str = "pinpoint_quality_report.json";
-const PINPOINT_EVAL_MANIFEST_SOURCE: &str = "validate-pinpoint-bootstrap-v1";
-const PINPOINT_UNIT_LIMIT: usize = 5;
-const PINPOINT_TABLE_ROW_LIMIT: usize = 64;
+pub const PINPOINT_EVAL_MANIFEST_FILENAME: &str = "pinpoint_eval_queries.json";
+pub const PINPOINT_QUALITY_REPORT_FILENAME: &str = "pinpoint_quality_report.json";
+pub const PINPOINT_EVAL_MANIFEST_SOURCE: &str = "validate-pinpoint-bootstrap-v1";
+pub const PINPOINT_UNIT_LIMIT: usize = 5;
+pub const PINPOINT_TABLE_ROW_LIMIT: usize = 64;
 
-const PINPOINT_TOKEN_STOPWORDS: &[&str] = &[
+pub const PINPOINT_TOKEN_STOPWORDS: &[&str] = &[
     "a",
     "an",
     "and",
@@ -31,35 +31,35 @@ const PINPOINT_TOKEN_STOPWORDS: &[&str] = &[
     "with",
 ];
 
-const WP3_PINPOINT_AT1_STAGE_A_MIN: f64 = 0.70;
-const WP3_PINPOINT_AT1_STAGE_B_MIN: f64 = 0.82;
-const WP3_PINPOINT_TABLE_STAGE_A_MIN: f64 = 0.70;
-const WP3_PINPOINT_TABLE_STAGE_B_MIN: f64 = 0.85;
-const WP3_PINPOINT_FALLBACK_STAGE_A_MAX: f64 = 0.35;
-const WP3_PINPOINT_FALLBACK_STAGE_B_MAX: f64 = 0.20;
-const WP3_PINPOINT_DETERMINISM_STAGE_A_MIN: f64 = 0.95;
-const WP3_PINPOINT_DETERMINISM_STAGE_B_MIN: f64 = 0.98;
-const WP3_PINPOINT_OVERHEAD_STAGE_A_MAX_MS: f64 = 60.0;
-const WP3_PINPOINT_OVERHEAD_STAGE_B_MAX_MS: f64 = 40.0;
+pub const WP3_PINPOINT_AT1_STAGE_A_MIN: f64 = 0.70;
+pub const WP3_PINPOINT_AT1_STAGE_B_MIN: f64 = 0.82;
+pub const WP3_PINPOINT_TABLE_STAGE_A_MIN: f64 = 0.70;
+pub const WP3_PINPOINT_TABLE_STAGE_B_MIN: f64 = 0.85;
+pub const WP3_PINPOINT_FALLBACK_STAGE_A_MAX: f64 = 0.35;
+pub const WP3_PINPOINT_FALLBACK_STAGE_B_MAX: f64 = 0.20;
+pub const WP3_PINPOINT_DETERMINISM_STAGE_A_MIN: f64 = 0.95;
+pub const WP3_PINPOINT_DETERMINISM_STAGE_B_MIN: f64 = 0.98;
+pub const WP3_PINPOINT_OVERHEAD_STAGE_A_MAX_MS: f64 = 60.0;
+pub const WP3_PINPOINT_OVERHEAD_STAGE_B_MAX_MS: f64 = 40.0;
 
 #[derive(Debug, Clone)]
-struct PinpointUnitEval {
-    unit_id: String,
-    unit_type: String,
-    score: f64,
-    text_preview: String,
-    row_key: Option<String>,
-    token_signature: String,
-    citation_anchor_compatible: bool,
+pub struct PinpointUnitEval {
+    pub unit_id: String,
+    pub unit_type: String,
+    pub score: f64,
+    pub text_preview: String,
+    pub row_key: Option<String>,
+    pub token_signature: String,
+    pub citation_anchor_compatible: bool,
 }
 
 #[derive(Debug, Clone)]
-struct PinpointQueryEval {
-    top_unit: Option<PinpointUnitEval>,
-    fallback_used: bool,
+pub struct PinpointQueryEval {
+    pub top_unit: Option<PinpointUnitEval>,
+    pub fallback_used: bool,
 }
 
-fn append_pinpoint_quality_assessment(
+pub fn append_pinpoint_quality_assessment(
     connection: &Connection,
     manifest_dir: &Path,
     run_id: &str,
@@ -99,6 +99,14 @@ fn append_pinpoint_quality_assessment(
     Ok(())
 }
 
-include!("semantic_quality_pinpoint_manifest.rs");
-include!("semantic_quality_pinpoint_eval.rs");
-include!("semantic_quality_pinpoint_checks.rs");
+#[path = "semantic_quality_pinpoint_checks.rs"]
+mod semantic_quality_pinpoint_checks;
+#[path = "semantic_quality_pinpoint_eval.rs"]
+mod semantic_quality_pinpoint_eval;
+#[path = "semantic_quality_pinpoint_manifest.rs"]
+mod semantic_quality_pinpoint_manifest;
+
+pub use self::semantic_quality_pinpoint_checks::*;
+pub use self::semantic_quality_pinpoint_eval::*;
+pub use self::semantic_quality_pinpoint_manifest::*;
+use super::*;

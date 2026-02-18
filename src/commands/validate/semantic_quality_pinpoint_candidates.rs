@@ -1,4 +1,6 @@
-fn collect_pinpoint_unit_candidates(
+use super::*;
+
+pub fn collect_pinpoint_unit_candidates(
     connection: &Connection,
     chunk_id: &str,
     parent_anchor_id: Option<&str>,
@@ -65,7 +67,7 @@ fn collect_pinpoint_unit_candidates(
     Ok(units)
 }
 
-fn sentence_units_for_pinpoint(
+pub fn sentence_units_for_pinpoint(
     chunk_id: &str,
     chunk_text: &str,
     parent_anchor: &str,
@@ -98,7 +100,7 @@ fn sentence_units_for_pinpoint(
     out
 }
 
-fn table_node_units_for_pinpoint(
+pub fn table_node_units_for_pinpoint(
     connection: &Connection,
     chunk_id: &str,
     table_node_id: &str,
@@ -141,7 +143,7 @@ fn table_node_units_for_pinpoint(
     Ok(units)
 }
 
-fn table_markdown_units_for_pinpoint(
+pub fn table_markdown_units_for_pinpoint(
     chunk_id: &str,
     table_md: &str,
     parent_anchor: &str,

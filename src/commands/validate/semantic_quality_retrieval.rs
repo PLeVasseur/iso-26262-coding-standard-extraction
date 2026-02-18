@@ -1,4 +1,6 @@
-fn semantic_eval_hybrid_hits(
+use super::*;
+
+pub fn semantic_eval_hybrid_hits(
     connection: &Connection,
     query_text: &str,
     part_filter: Option<u32>,
@@ -34,8 +36,8 @@ fn semantic_eval_hybrid_hits(
 
     #[derive(Clone)]
     struct HybridRow {
-        hit: SemanticRetrievedHit,
-        score: f64,
+        pub hit: SemanticRetrievedHit,
+        pub score: f64,
     }
 
     let mut fused = HashMap::<String, HybridRow>::new();
@@ -90,7 +92,7 @@ fn semantic_eval_hybrid_hits(
     Ok(out)
 }
 
-fn semantic_eval_lexical_hits(
+pub fn semantic_eval_lexical_hits(
     connection: &Connection,
     query_text: &str,
     part_filter: Option<u32>,
@@ -151,7 +153,7 @@ fn semantic_eval_lexical_hits(
     Ok(hits)
 }
 
-fn semantic_eval_semantic_hits(
+pub fn semantic_eval_semantic_hits(
     connection: &Connection,
     query_text: &str,
     part_filter: Option<u32>,
@@ -254,7 +256,7 @@ fn semantic_eval_semantic_hits(
     Ok(hits)
 }
 
-fn semantic_hit_identity(hit: &SemanticRetrievedHit) -> String {
+pub fn semantic_hit_identity(hit: &SemanticRetrievedHit) -> String {
     format!(
         "{}|{}|{}|{}|{}",
         hit.chunk_id,
@@ -265,7 +267,7 @@ fn semantic_hit_identity(hit: &SemanticRetrievedHit) -> String {
     )
 }
 
-fn ndcg_at_k(
+pub fn ndcg_at_k(
     results: &[String],
     expected: &HashSet<String>,
     judged: &HashSet<String>,
@@ -322,7 +324,7 @@ fn ndcg_at_k(
     Some(dcg / idcg)
 }
 
-fn top_k_jaccard_overlap(
+pub fn top_k_jaccard_overlap(
     left: &[SemanticRetrievedHit],
     right: &[SemanticRetrievedHit],
     k: usize,
@@ -351,7 +353,7 @@ fn top_k_jaccard_overlap(
     Some(intersection_count as f64 / union_count as f64)
 }
 
-fn query_signal_tokens(query_text: &str) -> Vec<String> {
+pub fn query_signal_tokens(query_text: &str) -> Vec<String> {
     const STOPWORDS: &[&str] = &[
         "a",
         "an",
@@ -384,7 +386,7 @@ fn query_signal_tokens(query_text: &str) -> Vec<String> {
     tokens
 }
 
-fn semantic_embedding_query_text(query_text: &str) -> String {
+pub fn semantic_embedding_query_text(query_text: &str) -> String {
     const NOISE_PREFIXES: &[&str] = &[
         "concept guidance for ",
         "requirements concerning ",
@@ -416,7 +418,7 @@ fn semantic_embedding_query_text(query_text: &str) -> String {
     normalized
 }
 
-fn lexical_signal_bonus(query_tokens: &[String], reference: &str, heading: &str, text: &str) -> f64 {
+pub fn lexical_signal_bonus(query_tokens: &[String], reference: &str, heading: &str, text: &str) -> f64 {
     if query_tokens.is_empty() {
         return 0.0;
     }
@@ -434,7 +436,7 @@ fn lexical_signal_bonus(query_tokens: &[String], reference: &str, heading: &str,
     overlap as f64 / query_tokens.len() as f64
 }
 
-fn reciprocal_rank_at_k(results: &[String], expected: &HashSet<String>, k: usize) -> Option<f64> {
+pub fn reciprocal_rank_at_k(results: &[String], expected: &HashSet<String>, k: usize) -> Option<f64> {
     if expected.is_empty() || k == 0 {
         return None;
     }
@@ -447,7 +449,7 @@ fn reciprocal_rank_at_k(results: &[String], expected: &HashSet<String>, k: usize
     Some(0.0)
 }
 
-fn recall_at_k(results: &[String], expected: &HashSet<String>, k: usize) -> Option<f64> {
+pub fn recall_at_k(results: &[String], expected: &HashSet<String>, k: usize) -> Option<f64> {
     if expected.is_empty() || k == 0 {
         return None;
     }
@@ -460,7 +462,7 @@ fn recall_at_k(results: &[String], expected: &HashSet<String>, k: usize) -> Opti
     Some(hit_count as f64 / expected.len() as f64)
 }
 
-fn judged_at_k(results: &[String], judged: &HashSet<String>, k: usize) -> Option<f64> {
+pub fn judged_at_k(results: &[String], judged: &HashSet<String>, k: usize) -> Option<f64> {
     if judged.is_empty() || k == 0 {
         return None;
     }
@@ -477,7 +479,7 @@ fn judged_at_k(results: &[String], judged: &HashSet<String>, k: usize) -> Option
         .count();
     Some(judged_in_top_k as f64 / k as f64)
 }
-fn percentile(values: &[f64], quantile: f64) -> Option<f64> {
+pub fn percentile(values: &[f64], quantile: f64) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
@@ -491,7 +493,7 @@ fn percentile(values: &[f64], quantile: f64) -> Option<f64> {
     sorted.get(index).copied()
 }
 
-fn mean(values: &[f64]) -> Option<f64> {
+pub fn mean(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }

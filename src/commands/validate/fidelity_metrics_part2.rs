@@ -1,4 +1,6 @@
-fn compute_list_semantics_metrics(
+use super::*;
+
+pub fn compute_list_semantics_metrics(
     connection: &Connection,
     latest_counts: &IngestRunCountsSnapshot,
 ) -> Result<ListSemanticsMetrics> {
@@ -53,20 +55,20 @@ fn compute_list_semantics_metrics(
 }
 
 #[derive(Debug, Default)]
-struct TableSemanticsMetrics {
-    table_cells_total: usize,
-    table_cells_semantics_complete: usize,
-    invalid_span_count: usize,
-    header_cells_total: usize,
-    header_cells_flagged: usize,
-    one_cell_rows: usize,
-    total_table_rows: usize,
-    targeted_semantic_miss_count: usize,
-    asil_one_cell_rows: usize,
-    asil_total_rows: usize,
+pub struct TableSemanticsMetrics {
+    pub table_cells_total: usize,
+    pub table_cells_semantics_complete: usize,
+    pub invalid_span_count: usize,
+    pub header_cells_total: usize,
+    pub header_cells_flagged: usize,
+    pub one_cell_rows: usize,
+    pub total_table_rows: usize,
+    pub targeted_semantic_miss_count: usize,
+    pub asil_one_cell_rows: usize,
+    pub asil_total_rows: usize,
 }
 
-fn compute_table_semantics_metrics(connection: &Connection) -> Result<TableSemanticsMetrics> {
+pub fn compute_table_semantics_metrics(connection: &Connection) -> Result<TableSemanticsMetrics> {
     let (table_cells_total, table_cells_semantics_complete, invalid_span_count): (
         usize,
         usize,
@@ -219,29 +221,29 @@ fn compute_table_semantics_metrics(connection: &Connection) -> Result<TableSeman
 }
 
 #[derive(Debug, Default)]
-struct CitationParityComputation {
-    baseline_run_id: Option<String>,
-    baseline_checksum: Option<String>,
-    baseline_created: bool,
-    baseline_missing: bool,
-    target_linked_total: usize,
-    comparable_total: usize,
-    top1_parity: Option<f64>,
-    top3_containment: Option<f64>,
-    page_range_parity: Option<f64>,
+pub struct CitationParityComputation {
+    pub baseline_run_id: Option<String>,
+    pub baseline_checksum: Option<String>,
+    pub baseline_created: bool,
+    pub baseline_missing: bool,
+    pub target_linked_total: usize,
+    pub comparable_total: usize,
+    pub top1_parity: Option<f64>,
+    pub top3_containment: Option<f64>,
+    pub page_range_parity: Option<f64>,
 }
 
 #[derive(Debug, Default)]
-struct SemanticEmbeddingMetrics {
-    active_model_id: String,
-    embedding_dim: Option<usize>,
-    eligible_chunks: usize,
-    embedded_chunks: usize,
-    stale_rows: usize,
-    embedding_rows_for_active_model: usize,
+pub struct SemanticEmbeddingMetrics {
+    pub active_model_id: String,
+    pub embedding_dim: Option<usize>,
+    pub eligible_chunks: usize,
+    pub embedded_chunks: usize,
+    pub stale_rows: usize,
+    pub embedding_rows_for_active_model: usize,
 }
 
-fn compute_semantic_embedding_metrics(connection: &Connection) -> Result<SemanticEmbeddingMetrics> {
+pub fn compute_semantic_embedding_metrics(connection: &Connection) -> Result<SemanticEmbeddingMetrics> {
     let has_embedding_tables: i64 = connection.query_row(
         "
         SELECT COUNT(*)

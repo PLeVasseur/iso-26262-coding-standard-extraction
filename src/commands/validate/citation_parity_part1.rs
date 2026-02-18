@@ -1,4 +1,6 @@
-fn build_citation_parity_artifacts(
+use super::*;
+
+pub fn build_citation_parity_artifacts(
     connection: &Connection,
     manifest_dir: &Path,
     baseline_path: &Path,
@@ -146,7 +148,7 @@ fn build_citation_parity_artifacts(
     })
 }
 
-fn resolve_citation_baseline_rationale() -> (Option<String>, Option<String>) {
+pub fn resolve_citation_baseline_rationale() -> (Option<String>, Option<String>) {
     let decision_id = std::env::var(WP2_CITATION_BASELINE_DECISION_ENV)
         .ok()
         .map(|value| value.trim().to_string())
@@ -159,7 +161,7 @@ fn resolve_citation_baseline_rationale() -> (Option<String>, Option<String>) {
     (decision_id, reason)
 }
 
-fn write_citation_parity_lockfile(path: &Path, baseline: &CitationParityBaseline) -> Result<()> {
+pub fn write_citation_parity_lockfile(path: &Path, baseline: &CitationParityBaseline) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -170,7 +172,7 @@ fn write_citation_parity_lockfile(path: &Path, baseline: &CitationParityBaseline
     write_json_pretty(path, baseline)
 }
 
-fn read_citation_parity_lockfile(path: &Path) -> Result<CitationParityBaseline> {
+pub fn read_citation_parity_lockfile(path: &Path) -> Result<CitationParityBaseline> {
     let raw = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let parsed = serde_json::from_slice::<serde_json::Value>(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
@@ -179,7 +181,7 @@ fn read_citation_parity_lockfile(path: &Path) -> Result<CitationParityBaseline> 
         .with_context(|| format!("failed to decode {}", path.display()))
 }
 
-fn ensure_citation_baseline_metadata_only(value: &serde_json::Value) -> Result<()> {
+pub fn ensure_citation_baseline_metadata_only(value: &serde_json::Value) -> Result<()> {
     const FORBIDDEN_KEYS: &[&str] = &[
         "text",
         "snippet",
@@ -220,7 +222,7 @@ fn ensure_citation_baseline_metadata_only(value: &serde_json::Value) -> Result<(
     Ok(())
 }
 
-fn collect_citation_parity_entries(
+pub fn collect_citation_parity_entries(
     connection: &Connection,
     refs: &[GoldReference],
 ) -> Result<Vec<CitationParityEntry>> {
@@ -253,7 +255,7 @@ fn collect_citation_parity_entries(
     Ok(entries)
 }
 
-fn query_citation_parity_results(
+pub fn query_citation_parity_results(
     connection: &Connection,
     doc_id: &str,
     reference: &str,
@@ -316,7 +318,7 @@ fn query_citation_parity_results(
     Ok(out)
 }
 
-fn canonicalize_reference_for_parity(reference: &str) -> String {
+pub fn canonicalize_reference_for_parity(reference: &str) -> String {
     if let Some((base, _)) = reference.split_once(" item ") {
         return base.trim().to_string();
     }
@@ -332,7 +334,7 @@ fn canonicalize_reference_for_parity(reference: &str) -> String {
     reference.trim().to_string()
 }
 
-fn checksum_citation_entries(entries: &[CitationParityEntry]) -> String {
+pub fn checksum_citation_entries(entries: &[CitationParityEntry]) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for entry in entries {
         entry.target_id.hash(&mut hasher);
@@ -345,7 +347,7 @@ fn checksum_citation_entries(entries: &[CitationParityEntry]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn replay_stability_ratio(
+pub fn replay_stability_ratio(
     current_entries: &[PageProvenanceEntry],
     previous_entries: &[PageProvenanceEntry],
     backend: &str,

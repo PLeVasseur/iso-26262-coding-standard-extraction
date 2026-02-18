@@ -1,4 +1,6 @@
-fn load_or_bootstrap_pinpoint_eval_manifest(
+use super::*;
+
+pub fn load_or_bootstrap_pinpoint_eval_manifest(
     connection: &Connection,
     manifest_dir: &Path,
     semantic_eval_manifest: &SemanticEvalManifest,
@@ -26,7 +28,7 @@ fn load_or_bootstrap_pinpoint_eval_manifest(
     Ok(manifest)
 }
 
-fn bootstrap_pinpoint_eval_manifest(
+pub fn bootstrap_pinpoint_eval_manifest(
     connection: &Connection,
     semantic_eval_manifest: &SemanticEvalManifest,
 ) -> Result<PinpointEvalManifest> {
@@ -92,7 +94,7 @@ fn bootstrap_pinpoint_eval_manifest(
     })
 }
 
-fn normalize_pinpoint_eval_manifest(manifest: &mut PinpointEvalManifest) {
+pub fn normalize_pinpoint_eval_manifest(manifest: &mut PinpointEvalManifest) {
     manifest.queries.retain(|query| {
         !query.query_id.trim().is_empty()
             && !query.query_text.trim().is_empty()
@@ -152,7 +154,7 @@ fn normalize_pinpoint_eval_manifest(manifest: &mut PinpointEvalManifest) {
         .dedup_by(|left, right| left.query_id == right.query_id);
 }
 
-fn enrich_pinpoint_eval_manifest(
+pub fn enrich_pinpoint_eval_manifest(
     connection: &Connection,
     manifest: &mut PinpointEvalManifest,
 ) -> Result<bool> {
@@ -223,7 +225,7 @@ fn enrich_pinpoint_eval_manifest(
     Ok(changed)
 }
 
-fn bootstrap_expected_table_units(
+pub fn bootstrap_expected_table_units(
     connection: &Connection,
     parent_chunk_id: &str,
 ) -> Result<(Vec<String>, Vec<String>)> {
@@ -255,7 +257,7 @@ fn bootstrap_expected_table_units(
     Ok((unit_ids, row_keys))
 }
 
-fn resolve_chunk_type(connection: &Connection, chunk_id: &str) -> Result<Option<String>> {
+pub fn resolve_chunk_type(connection: &Connection, chunk_id: &str) -> Result<Option<String>> {
     connection
         .query_row(
             "SELECT type FROM chunks WHERE chunk_id = ?1 LIMIT 1",
@@ -267,7 +269,7 @@ fn resolve_chunk_type(connection: &Connection, chunk_id: &str) -> Result<Option<
         .map_err(Into::into)
 }
 
-fn resolve_table_node_id(connection: &Connection, chunk_id: &str) -> Result<Option<String>> {
+pub fn resolve_table_node_id(connection: &Connection, chunk_id: &str) -> Result<Option<String>> {
     connection
         .query_row(
             "SELECT origin_node_id FROM chunks WHERE chunk_id = ?1 LIMIT 1",
@@ -279,7 +281,7 @@ fn resolve_table_node_id(connection: &Connection, chunk_id: &str) -> Result<Opti
         .map_err(Into::into)
 }
 
-fn build_expected_token_sets(
+pub fn build_expected_token_sets(
     connection: &Connection,
     query_text: &str,
     reference_hint: Option<&str>,
@@ -330,7 +332,7 @@ fn build_expected_token_sets(
     Ok(token_sets)
 }
 
-fn resolve_chunk_pinpoint_hints(
+pub fn resolve_chunk_pinpoint_hints(
     connection: &Connection,
     chunk_id: &str,
 ) -> Result<Option<(String, String, String)>> {
@@ -355,7 +357,7 @@ fn resolve_chunk_pinpoint_hints(
         .map_err(Into::into)
 }
 
-fn primary_chunk_sentence_tokens(text: &str) -> Vec<String> {
+pub fn primary_chunk_sentence_tokens(text: &str) -> Vec<String> {
     let sentence = text
         .split(|character| matches!(character, '.' | '!' | '?' | ';' | '\n'))
         .map(str::trim)
@@ -364,7 +366,7 @@ fn primary_chunk_sentence_tokens(text: &str) -> Vec<String> {
     tokenize_pinpoint_value(sentence)
 }
 
-fn compact_expected_token_set(tokens: Vec<String>, max_tokens: usize) -> Vec<String> {
+pub fn compact_expected_token_set(tokens: Vec<String>, max_tokens: usize) -> Vec<String> {
     let mut ranked = tokens;
     ranked.sort_by(|left, right| right.len().cmp(&left.len()).then(left.cmp(right)));
     ranked.truncate(max_tokens);
@@ -373,7 +375,7 @@ fn compact_expected_token_set(tokens: Vec<String>, max_tokens: usize) -> Vec<Str
     ranked
 }
 
-fn is_useful_expected_token_set(tokens: &[String]) -> bool {
+pub fn is_useful_expected_token_set(tokens: &[String]) -> bool {
     !tokens.is_empty()
         && tokens.iter().any(|token| {
             token

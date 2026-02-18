@@ -1,3 +1,5 @@
+use super::*;
+
 pub fn run(args: ValidateArgs) -> Result<()> {
     let manifest_dir = args.cache_root.join("manifests");
     let gold_manifest_path = args

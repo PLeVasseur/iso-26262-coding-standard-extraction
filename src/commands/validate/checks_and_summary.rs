@@ -1,4 +1,6 @@
-fn build_quality_checks(
+use super::*;
+
+pub fn build_quality_checks(
     connection: &Connection,
     refs: &[GoldReference],
     evals: &[ReferenceEvaluation],
@@ -452,7 +454,7 @@ fn build_quality_checks(
     Ok(checks)
 }
 
-fn evaluate_max_threshold(value: Option<f64>, max_allowed: f64) -> &'static str {
+pub fn evaluate_max_threshold(value: Option<f64>, max_allowed: f64) -> &'static str {
     match value {
         Some(actual) if actual <= max_allowed => "pass",
         Some(_) => "failed",
@@ -460,7 +462,7 @@ fn evaluate_max_threshold(value: Option<f64>, max_allowed: f64) -> &'static str 
     }
 }
 
-fn evaluate_min_threshold(value: Option<f64>, min_allowed: f64) -> &'static str {
+pub fn evaluate_min_threshold(value: Option<f64>, min_allowed: f64) -> &'static str {
     match value {
         Some(actual) if actual >= min_allowed => "pass",
         Some(_) => "failed",
@@ -468,7 +470,7 @@ fn evaluate_min_threshold(value: Option<f64>, min_allowed: f64) -> &'static str 
     }
 }
 
-fn summarize_checks(checks: &[QualityCheck]) -> QualitySummary {
+pub fn summarize_checks(checks: &[QualityCheck]) -> QualitySummary {
     let passed = checks.iter().filter(|check| check.result == "pass").count();
     let failed = checks
         .iter()

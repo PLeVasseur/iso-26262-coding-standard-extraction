@@ -1,4 +1,6 @@
-fn collect_structural_invariants(connection: &Connection) -> Result<StructuralInvariantSummary> {
+use super::*;
+
+pub fn collect_structural_invariants(connection: &Connection) -> Result<StructuralInvariantSummary> {
     Ok(StructuralInvariantSummary {
         parent_required_missing_count: query_violation_count(
             connection,
@@ -82,7 +84,7 @@ fn collect_structural_invariants(connection: &Connection) -> Result<StructuralIn
     })
 }
 
-fn collect_asil_table_alignment(
+pub fn collect_asil_table_alignment(
     connection: &Connection,
     doc_id: &str,
     table_refs: &[&str],
@@ -159,7 +161,7 @@ fn collect_asil_table_alignment(
     Ok(summary)
 }
 
-fn analyze_asil_marker_row(cells: &[String], summary: &mut AsilTableAlignmentSummary) {
+pub fn analyze_asil_marker_row(cells: &[String], summary: &mut AsilTableAlignmentSummary) {
     let Some(first_cell) = cells.first() else {
         return;
     };
@@ -184,7 +186,7 @@ fn analyze_asil_marker_row(cells: &[String], summary: &mut AsilTableAlignmentSum
     }
 }
 
-fn evaluate_asil_table_alignment(summary: &AsilTableAlignmentSummary) -> &'static str {
+pub fn evaluate_asil_table_alignment(summary: &AsilTableAlignmentSummary) -> &'static str {
     if summary.tables_found < summary.tables_expected || summary.marker_rows_total == 0 {
         return "pending";
     }
@@ -209,7 +211,7 @@ fn evaluate_asil_table_alignment(summary: &AsilTableAlignmentSummary) -> &'stati
     }
 }
 
-fn looks_like_table_marker(value: &str) -> bool {
+pub fn looks_like_table_marker(value: &str) -> bool {
     let normalized = normalize_anchor_label(value);
     if normalized.is_empty() {
         return false;
@@ -240,7 +242,7 @@ fn looks_like_table_marker(value: &str) -> bool {
     chars.next().is_none()
 }
 
-fn is_malformed_marker_description(description: &str) -> bool {
+pub fn is_malformed_marker_description(description: &str) -> bool {
     let trimmed = description.trim();
     if trimmed.is_empty() {
         return true;
@@ -253,23 +255,23 @@ fn is_malformed_marker_description(description: &str) -> bool {
     alphabetic_count <= 1 && trimmed.split_whitespace().count() <= 1
 }
 
-fn contains_asil_rating(cell_text: &str) -> bool {
+pub fn contains_asil_rating(cell_text: &str) -> bool {
     cell_text
         .split_whitespace()
         .map(|token| token.trim_matches(['(', ')', '.', ':', ';', ',']))
         .any(is_asil_rating_token)
 }
 
-fn is_asil_rating_token(token: &str) -> bool {
+pub fn is_asil_rating_token(token: &str) -> bool {
     matches!(token, "+" | "++" | "-" | "--" | "+/-" | "+/−" | "−/+" | "o")
 }
 
-fn query_violation_count(connection: &Connection, sql: &str) -> Result<i64> {
+pub fn query_violation_count(connection: &Connection, sql: &str) -> Result<i64> {
     let count = connection.query_row(sql, [], |row| row.get::<_, i64>(0))?;
     Ok(count)
 }
 
-fn collect_hierarchy_stats(
+pub fn collect_hierarchy_stats(
     connection: &Connection,
     origin_node_id: &str,
 ) -> Result<(Option<String>, usize, usize, usize)> {
@@ -347,7 +349,7 @@ fn collect_hierarchy_stats(
     ))
 }
 
-fn evaluate_hierarchy_expectations(
+pub fn evaluate_hierarchy_expectations(
     reference: &GoldReference,
     leaf_node_type: Option<&str>,
     parent_ref: Option<&str>,
@@ -423,7 +425,7 @@ fn evaluate_hierarchy_expectations(
         && paragraph_index_ok
 }
 
-fn build_hierarchy_metrics(evals: &[ReferenceEvaluation]) -> HierarchyMetrics {
+pub fn build_hierarchy_metrics(evals: &[ReferenceEvaluation]) -> HierarchyMetrics {
     HierarchyMetrics {
         references_with_lineage: evals
             .iter()
@@ -444,7 +446,7 @@ fn build_hierarchy_metrics(evals: &[ReferenceEvaluation]) -> HierarchyMetrics {
     }
 }
 
-fn has_hierarchy_expectations(reference: &GoldReference) -> bool {
+pub fn has_hierarchy_expectations(reference: &GoldReference) -> bool {
     reference.expected_node_type.is_some()
         || reference.expected_parent_ref.is_some()
         || reference.expected_min_rows.is_some()
@@ -455,7 +457,7 @@ fn has_hierarchy_expectations(reference: &GoldReference) -> bool {
         || reference.expected_paragraph_index.is_some()
 }
 
-fn normalize_anchor_label(value: &str) -> String {
+pub fn normalize_anchor_label(value: &str) -> String {
     value
         .trim()
         .trim_end_matches([')', '.', ':', ';'])

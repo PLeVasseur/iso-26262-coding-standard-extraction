@@ -1,4 +1,6 @@
-fn append_pinpoint_checks(
+use super::*;
+
+pub fn append_pinpoint_checks(
     stage: Wp2GateStage,
     summary: &PinpointQualitySummary,
     checks: &mut Vec<QualityCheck>,

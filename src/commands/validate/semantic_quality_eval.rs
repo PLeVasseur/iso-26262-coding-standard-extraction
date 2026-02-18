@@ -1,4 +1,6 @@
-fn compute_semantic_eval_quality(
+use super::*;
+
+pub fn compute_semantic_eval_quality(
     connection: &Connection,
     manifest_dir: &Path,
     run_id: &str,
@@ -359,7 +361,7 @@ fn compute_semantic_eval_quality(
     Ok(SemanticEvalComputation { summary })
 }
 
-fn evaluate_semantic_query(
+pub fn evaluate_semantic_query(
     connection: &Connection,
     query: &SemanticEvalQuery,
     model_id: &str,

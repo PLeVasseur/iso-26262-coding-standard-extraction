@@ -1,4 +1,4 @@
-fn compute_pinpoint_quality(
+pub fn compute_pinpoint_quality(
     connection: &Connection,
     manifest_dir: &Path,
     run_id: &str,
@@ -232,7 +232,7 @@ fn compute_pinpoint_quality(
     Ok(artifact)
 }
 
-fn evaluate_pinpoint_for_chunk(
+pub fn evaluate_pinpoint_for_chunk(
     connection: &Connection,
     chunk_id: &str,
     parent_anchor_id: Option<&str>,
@@ -335,5 +335,11 @@ fn evaluate_pinpoint_for_chunk(
     })
 }
 
-include!("semantic_quality_pinpoint_candidates.rs");
-include!("semantic_quality_pinpoint_utils.rs");
+#[path = "semantic_quality_pinpoint_candidates.rs"]
+mod semantic_quality_pinpoint_candidates;
+#[path = "semantic_quality_pinpoint_utils.rs"]
+mod semantic_quality_pinpoint_utils;
+
+pub use self::semantic_quality_pinpoint_candidates::*;
+pub use self::semantic_quality_pinpoint_utils::*;
+use super::*;

@@ -1,4 +1,6 @@
-fn load_or_bootstrap_semantic_eval_manifest(
+use super::*;
+
+pub fn load_or_bootstrap_semantic_eval_manifest(
     connection: &Connection,
     manifest_dir: &Path,
     refs: &[GoldReference],
@@ -23,7 +25,7 @@ fn load_or_bootstrap_semantic_eval_manifest(
     Ok(manifest)
 }
 
-fn bootstrap_semantic_eval_manifest(
+pub fn bootstrap_semantic_eval_manifest(
     connection: &Connection,
     refs: &[GoldReference],
 ) -> Result<SemanticEvalManifest> {
@@ -179,7 +181,7 @@ fn bootstrap_semantic_eval_manifest(
     Ok(manifest)
 }
 
-fn normalize_semantic_eval_manifest(manifest: &mut SemanticEvalManifest) {
+pub fn normalize_semantic_eval_manifest(manifest: &mut SemanticEvalManifest) {
     manifest.queries.retain(|query| {
         !query.query_id.trim().is_empty()
             && !query.query_text.trim().is_empty()
@@ -216,7 +218,7 @@ fn normalize_semantic_eval_manifest(manifest: &mut SemanticEvalManifest) {
         .dedup_by(|left, right| left.query_id == right.query_id);
 }
 
-fn fill_missing_judged_chunk_ids(
+pub fn fill_missing_judged_chunk_ids(
     connection: &Connection,
     manifest: &mut SemanticEvalManifest,
 ) -> Result<bool> {
@@ -236,7 +238,7 @@ fn fill_missing_judged_chunk_ids(
     Ok(changed)
 }
 
-fn bootstrap_judged_chunk_ids(connection: &Connection, expected_chunk_id: &str) -> Result<Vec<String>> {
+pub fn bootstrap_judged_chunk_ids(connection: &Connection, expected_chunk_id: &str) -> Result<Vec<String>> {
     let mut statement = connection.prepare(
         "
         WITH seed AS (
@@ -269,7 +271,7 @@ fn bootstrap_judged_chunk_ids(connection: &Connection, expected_chunk_id: &str) 
     Ok(chunk_ids)
 }
 
-fn resolve_reference_chunk_id(
+pub fn resolve_reference_chunk_id(
     connection: &Connection,
     doc_id: &str,
     reference: &str,
@@ -311,7 +313,7 @@ fn resolve_reference_chunk_id(
     Ok(contains)
 }
 
-fn resolve_doc_part(connection: &Connection, doc_id: &str) -> Result<Option<u32>> {
+pub fn resolve_doc_part(connection: &Connection, doc_id: &str) -> Result<Option<u32>> {
     let part = connection
         .query_row(
             "SELECT part FROM docs WHERE doc_id = ?1 LIMIT 1",
@@ -322,7 +324,7 @@ fn resolve_doc_part(connection: &Connection, doc_id: &str) -> Result<Option<u32>
     Ok(part)
 }
 
-fn fallback_seed_chunk(connection: &Connection) -> Result<Option<(String, String, u32)>> {
+pub fn fallback_seed_chunk(connection: &Connection) -> Result<Option<(String, String, u32)>> {
     let row = connection
         .query_row(
             "

@@ -1,4 +1,6 @@
-fn tokenize_pinpoint_value(value: &str) -> Vec<String> {
+use super::*;
+
+pub fn tokenize_pinpoint_value(value: &str) -> Vec<String> {
     let mut tokens = value
         .to_ascii_lowercase()
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -18,7 +20,7 @@ fn tokenize_pinpoint_value(value: &str) -> Vec<String> {
     tokens
 }
 
-fn condense_whitespace(input: &str) -> String {
+pub fn condense_whitespace(input: &str) -> String {
     input
         .split_whitespace()
         .collect::<Vec<&str>>()
@@ -27,7 +29,7 @@ fn condense_whitespace(input: &str) -> String {
         .to_string()
 }
 
-fn pinpoint_anchor_compatible(unit_anchor: Option<&str>, parent_anchor: Option<&str>) -> bool {
+pub fn pinpoint_anchor_compatible(unit_anchor: Option<&str>, parent_anchor: Option<&str>) -> bool {
     let Some(parent_anchor) = parent_anchor.filter(|value| !value.trim().is_empty()) else {
         return true;
     };
@@ -43,7 +45,7 @@ fn pinpoint_anchor_compatible(unit_anchor: Option<&str>, parent_anchor: Option<&
     parent_family.is_some() && parent_family == unit_family
 }
 
-fn anchor_family(anchor: &str) -> Option<(String, String)> {
+pub fn anchor_family(anchor: &str) -> Option<(String, String)> {
     let mut parts = anchor.split(':');
     let first = parts.next()?.trim();
     let second = parts.next()?.trim();
@@ -53,7 +55,7 @@ fn anchor_family(anchor: &str) -> Option<(String, String)> {
     Some((first.to_string(), second.to_string()))
 }
 
-fn token_overlap_score(query_tokens: &[String], unit_tokens: &[String]) -> f64 {
+pub fn token_overlap_score(query_tokens: &[String], unit_tokens: &[String]) -> f64 {
     if query_tokens.is_empty() || unit_tokens.is_empty() {
         return 0.0;
     }
@@ -65,12 +67,12 @@ fn token_overlap_score(query_tokens: &[String], unit_tokens: &[String]) -> f64 {
     overlap as f64 / query_tokens.len() as f64
 }
 
-fn query_mentions_table_context(query_text: &str) -> bool {
+pub fn query_mentions_table_context(query_text: &str) -> bool {
     let lowered = query_text.to_ascii_lowercase();
     lowered.contains("table") || lowered.contains(" row ") || lowered.contains(" cell ")
 }
 
-fn looks_like_table_reference_query(query_text: &str) -> bool {
+pub fn looks_like_table_reference_query(query_text: &str) -> bool {
     let lowered = condense_whitespace(query_text).to_ascii_lowercase();
     let mut tokens = lowered.split_whitespace();
     match (tokens.next(), tokens.next(), tokens.next()) {
@@ -81,7 +83,7 @@ fn looks_like_table_reference_query(query_text: &str) -> bool {
     }
 }
 
-fn pinpoint_unit_priority(unit_type: &str, mentions_table: bool, table_reference: bool) -> i32 {
+pub fn pinpoint_unit_priority(unit_type: &str, mentions_table: bool, table_reference: bool) -> i32 {
     if table_reference {
         return match unit_type {
             "table_row" => 4,
@@ -107,7 +109,7 @@ fn pinpoint_unit_priority(unit_type: &str, mentions_table: bool, table_reference
     }
 }
 
-fn select_pinpoint_parent_chunk(
+pub fn select_pinpoint_parent_chunk(
     query: &PinpointEvalQuery,
     retrieved_parent_chunk_id: Option<&str>,
 ) -> Option<String> {
@@ -128,7 +130,7 @@ fn select_pinpoint_parent_chunk(
         .or_else(|| retrieved_parent_chunk_id.map(str::to_string))
 }
 
-fn resolve_chunk_anchor_id(connection: &Connection, chunk_id: &str) -> Result<Option<String>> {
+pub fn resolve_chunk_anchor_id(connection: &Connection, chunk_id: &str) -> Result<Option<String>> {
     connection
         .query_row(
             "SELECT citation_anchor_id FROM chunks WHERE chunk_id = ?1 LIMIT 1",

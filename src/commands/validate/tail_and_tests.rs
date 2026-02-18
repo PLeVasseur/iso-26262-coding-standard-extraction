@@ -1,4 +1,7 @@
-fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
+#[cfg(test)]
+use super::*;
+
+pub fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
     match (start, end) {
         (Some(start), Some(end)) if start == end => start.to_string(),
         (Some(start), Some(end)) => format!("{start}-{end}"),

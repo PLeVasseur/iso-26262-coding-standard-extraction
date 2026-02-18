@@ -1,76 +1,78 @@
-const SEMANTIC_EVAL_MANIFEST_FILENAME: &str = "semantic_eval_queries.json";
-const SEMANTIC_QUALITY_REPORT_FILENAME: &str = "semantic_quality_report.json";
-const SEMANTIC_EVAL_MANIFEST_SOURCE: &str = "validate-bootstrap-v1";
-const SEMANTIC_TOP_K: usize = 10;
-const SEMANTIC_RETRIEVAL_LIMIT: usize = 50;
-const SEMANTIC_RRF_K: f64 = 60.0;
+use super::*;
 
-const WP3_EMBEDDING_COVERAGE_STAGE_A_MIN: f64 = 0.98;
-const WP3_EMBEDDING_COVERAGE_STAGE_B_MIN: f64 = 0.995;
-const WP3_STALE_EMBEDDING_STAGE_A_MAX: f64 = 0.02;
-const WP3_STALE_EMBEDDING_STAGE_B_MAX: f64 = 0.0;
-const WP3_SEMANTIC_NDCG_STAGE_A_MIN: f64 = 0.60;
-const WP3_SEMANTIC_NDCG_STAGE_B_MIN: f64 = 0.72;
-const WP3_HYBRID_NDCG_UPLIFT_STAGE_A_MIN: f64 = 0.03;
-const WP3_HYBRID_NDCG_UPLIFT_STAGE_B_MIN: f64 = 0.06;
-const WP3_EXACT_TOP1_MIN: f64 = 1.0;
-const WP3_CITATION_PARITY_MIN: f64 = 1.0;
-const WP3_LATENCY_RATIO_MAX: f64 = 2.5;
-const WP3_HYBRID_P95_MAX_MS: f64 = 500.0;
-const WP3_DETERMINISM_STAGE_A_MIN: f64 = 0.95;
-const WP3_DETERMINISM_STAGE_B_MIN: f64 = 0.98;
-const WP3_HYBRID_MRR_STAGE_A_MIN: f64 = 0.80;
-const WP3_HYBRID_MRR_STAGE_B_MIN: f64 = 0.90;
-const WP3_RECALL_DROP_STAGE_A_MAX: f64 = 0.02;
-const WP3_RECALL_DROP_STAGE_B_MAX: f64 = 0.0;
-const WP3_JUDGED_STAGE_A_MIN: f64 = 0.70;
-const WP3_JUDGED_STAGE_B_MIN: f64 = 0.85;
-const WP3_NDCG_UPLIFT_P_STAGE_A_MAX: f64 = 0.10;
-const WP3_NDCG_UPLIFT_P_STAGE_B_MAX: f64 = 0.05;
+pub const SEMANTIC_EVAL_MANIFEST_FILENAME: &str = "semantic_eval_queries.json";
+pub const SEMANTIC_QUALITY_REPORT_FILENAME: &str = "semantic_quality_report.json";
+pub const SEMANTIC_EVAL_MANIFEST_SOURCE: &str = "validate-bootstrap-v1";
+pub const SEMANTIC_TOP_K: usize = 10;
+pub const SEMANTIC_RETRIEVAL_LIMIT: usize = 50;
+pub const SEMANTIC_RRF_K: f64 = 60.0;
+
+pub const WP3_EMBEDDING_COVERAGE_STAGE_A_MIN: f64 = 0.98;
+pub const WP3_EMBEDDING_COVERAGE_STAGE_B_MIN: f64 = 0.995;
+pub const WP3_STALE_EMBEDDING_STAGE_A_MAX: f64 = 0.02;
+pub const WP3_STALE_EMBEDDING_STAGE_B_MAX: f64 = 0.0;
+pub const WP3_SEMANTIC_NDCG_STAGE_A_MIN: f64 = 0.60;
+pub const WP3_SEMANTIC_NDCG_STAGE_B_MIN: f64 = 0.72;
+pub const WP3_HYBRID_NDCG_UPLIFT_STAGE_A_MIN: f64 = 0.03;
+pub const WP3_HYBRID_NDCG_UPLIFT_STAGE_B_MIN: f64 = 0.06;
+pub const WP3_EXACT_TOP1_MIN: f64 = 1.0;
+pub const WP3_CITATION_PARITY_MIN: f64 = 1.0;
+pub const WP3_LATENCY_RATIO_MAX: f64 = 2.5;
+pub const WP3_HYBRID_P95_MAX_MS: f64 = 500.0;
+pub const WP3_DETERMINISM_STAGE_A_MIN: f64 = 0.95;
+pub const WP3_DETERMINISM_STAGE_B_MIN: f64 = 0.98;
+pub const WP3_HYBRID_MRR_STAGE_A_MIN: f64 = 0.80;
+pub const WP3_HYBRID_MRR_STAGE_B_MIN: f64 = 0.90;
+pub const WP3_RECALL_DROP_STAGE_A_MAX: f64 = 0.02;
+pub const WP3_RECALL_DROP_STAGE_B_MAX: f64 = 0.0;
+pub const WP3_JUDGED_STAGE_A_MIN: f64 = 0.70;
+pub const WP3_JUDGED_STAGE_B_MIN: f64 = 0.85;
+pub const WP3_NDCG_UPLIFT_P_STAGE_A_MAX: f64 = 0.10;
+pub const WP3_NDCG_UPLIFT_P_STAGE_B_MAX: f64 = 0.05;
 
 #[derive(Debug, Default)]
-struct SemanticQualityAssessment {
-    checks: Vec<QualityCheck>,
-    summary: SemanticQualitySummaryReport,
-    recommendations: Vec<String>,
+pub struct SemanticQualityAssessment {
+    pub checks: Vec<QualityCheck>,
+    pub summary: SemanticQualitySummaryReport,
+    pub recommendations: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct SemanticRetrievedHit {
-    chunk_id: String,
-    reference: String,
-    page_pdf_start: Option<i64>,
-    page_pdf_end: Option<i64>,
-    citation_anchor_id: Option<String>,
-    score: f64,
+pub struct SemanticRetrievedHit {
+    pub chunk_id: String,
+    pub reference: String,
+    pub page_pdf_start: Option<i64>,
+    pub page_pdf_end: Option<i64>,
+    pub citation_anchor_id: Option<String>,
+    pub score: f64,
 }
 
 #[derive(Debug)]
-struct SemanticEvalComputation {
-    summary: SemanticQualitySummaryReport,
+pub struct SemanticEvalComputation {
+    pub summary: SemanticQualitySummaryReport,
 }
 
 #[derive(Debug, Clone)]
-struct QueryEvalRecord {
-    lexical_hits: Vec<SemanticRetrievedHit>,
-    semantic_hits: Vec<SemanticRetrievedHit>,
-    hybrid_hits: Vec<SemanticRetrievedHit>,
-    lexical_ndcg: Option<f64>,
-    semantic_ndcg: Option<f64>,
-    hybrid_ndcg: Option<f64>,
-    hybrid_rr_at_10: Option<f64>,
-    lexical_recall_at_50: Option<f64>,
-    hybrid_recall_at_50: Option<f64>,
-    judged_at_10: Option<f64>,
-    lexical_latency_ms: f64,
-    semantic_latency_ms: f64,
-    hybrid_latency_ms: f64,
-    exact_top1_hit_hybrid: Option<bool>,
-    citation_top1_match_lexical_vs_hybrid: Option<bool>,
-    determinism_top10_overlap: Option<f64>,
+pub struct QueryEvalRecord {
+    pub lexical_hits: Vec<SemanticRetrievedHit>,
+    pub semantic_hits: Vec<SemanticRetrievedHit>,
+    pub hybrid_hits: Vec<SemanticRetrievedHit>,
+    pub lexical_ndcg: Option<f64>,
+    pub semantic_ndcg: Option<f64>,
+    pub hybrid_ndcg: Option<f64>,
+    pub hybrid_rr_at_10: Option<f64>,
+    pub lexical_recall_at_50: Option<f64>,
+    pub hybrid_recall_at_50: Option<f64>,
+    pub judged_at_10: Option<f64>,
+    pub lexical_latency_ms: f64,
+    pub semantic_latency_ms: f64,
+    pub hybrid_latency_ms: f64,
+    pub exact_top1_hit_hybrid: Option<bool>,
+    pub citation_top1_match_lexical_vs_hybrid: Option<bool>,
+    pub determinism_top10_overlap: Option<f64>,
 }
 
-fn build_semantic_quality_assessment(
+pub fn build_semantic_quality_assessment(
     connection: &Connection,
     manifest_dir: &Path,
     run_id: &str,
@@ -121,7 +123,7 @@ fn build_semantic_quality_assessment(
     Ok(assessment)
 }
 
-fn append_semantic_embedding_checks(
+pub fn append_semantic_embedding_checks(
     stage: Wp2GateStage,
     semantic_metrics: &SemanticEmbeddingMetrics,
     semantic_embeddings: &mut SemanticEmbeddingReport,
@@ -203,7 +205,7 @@ fn append_semantic_embedding_checks(
     }
 }
 
-fn append_semantic_retrieval_checks(
+pub fn append_semantic_retrieval_checks(
     stage: Wp2GateStage,
     summary: &SemanticQualitySummaryReport,
     checks: &mut Vec<QualityCheck>,

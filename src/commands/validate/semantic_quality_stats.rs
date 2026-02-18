@@ -1,4 +1,4 @@
-fn is_first_hit_intent(intent: &str) -> bool {
+pub fn is_first_hit_intent(intent: &str) -> bool {
     let normalized = intent.trim().to_ascii_lowercase();
     matches!(
         normalized.as_str(),
@@ -6,7 +6,7 @@ fn is_first_hit_intent(intent: &str) -> bool {
     )
 }
 
-fn sign_test_two_sided_p_value(deltas: &[f64]) -> Option<f64> {
+pub fn sign_test_two_sided_p_value(deltas: &[f64]) -> Option<f64> {
     let wins = deltas.iter().filter(|delta| **delta > 0.0).count();
     let losses = deltas.iter().filter(|delta| **delta < 0.0).count();
     let n = wins + losses;
@@ -22,7 +22,7 @@ fn sign_test_two_sided_p_value(deltas: &[f64]) -> Option<f64> {
     Some((2.0 * tail).min(1.0))
 }
 
-fn binomial_pmf_half(n: usize, k: usize) -> f64 {
+pub fn binomial_pmf_half(n: usize, k: usize) -> f64 {
     if k > n {
         return 0.0;
     }
@@ -35,7 +35,7 @@ fn binomial_pmf_half(n: usize, k: usize) -> f64 {
     coefficient * 0.5_f64.powi(n as i32)
 }
 
-fn bootstrap_confidence_interval_95(
+pub fn bootstrap_confidence_interval_95(
     deltas: &[f64],
     iterations: usize,
     seed: u64,

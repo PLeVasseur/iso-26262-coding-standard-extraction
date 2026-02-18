@@ -1,8 +1,10 @@
-fn empty_table_scorecard() -> TableQualityScorecard {
+use super::*;
+
+pub fn empty_table_scorecard() -> TableQualityScorecard {
     build_table_quality_scorecard(None, TableQualityCounters::default())
 }
 
-fn build_table_quality_scorecard(
+pub fn build_table_quality_scorecard(
     source_manifest: Option<String>,
     counters: TableQualityCounters,
 ) -> TableQualityScorecard {
@@ -33,7 +35,7 @@ fn build_table_quality_scorecard(
     }
 }
 
-fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
+pub fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
     if denominator == 0 {
         None
     } else {
@@ -41,7 +43,7 @@ fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
     }
 }
 
-fn collect_evaluable_doc_ids(connection: &Connection) -> Result<HashSet<String>> {
+pub fn collect_evaluable_doc_ids(connection: &Connection) -> Result<HashSet<String>> {
     let mut statement = connection.prepare("SELECT DISTINCT doc_id FROM chunks")?;
     let mut rows = statement.query([])?;
 
@@ -56,7 +58,7 @@ fn collect_evaluable_doc_ids(connection: &Connection) -> Result<HashSet<String>>
     Ok(doc_ids)
 }
 
-fn skipped_reference_evaluation() -> ReferenceEvaluation {
+pub fn skipped_reference_evaluation() -> ReferenceEvaluation {
     ReferenceEvaluation {
         skipped: true,
         found: false,
@@ -75,7 +77,7 @@ fn skipped_reference_evaluation() -> ReferenceEvaluation {
     }
 }
 
-fn evaluate_reference(
+pub fn evaluate_reference(
     connection: &Connection,
     reference: &GoldReference,
 ) -> Result<ReferenceEvaluation> {

@@ -1,4 +1,6 @@
-fn wp2_result(stage: Wp2GateStage, hard_fail: bool, stage_b_fail: bool) -> &'static str {
+use super::*;
+
+pub fn wp2_result(stage: Wp2GateStage, hard_fail: bool, stage_b_fail: bool) -> &'static str {
     if hard_fail {
         return "failed";
     }
@@ -11,19 +13,19 @@ fn wp2_result(stage: Wp2GateStage, hard_fail: bool, stage_b_fail: bool) -> &'sta
 }
 
 #[derive(Debug, Default)]
-struct PrintedPageMetrics {
-    total_pages: usize,
-    pages_with_explicit_status: usize,
-    detectable_pages: usize,
-    total_chunks: usize,
-    mapped_chunks: usize,
-    detectable_chunks: usize,
-    mapped_detectable_chunks: usize,
-    invalid_label_count: usize,
-    invalid_range_count: usize,
+pub struct PrintedPageMetrics {
+    pub total_pages: usize,
+    pub pages_with_explicit_status: usize,
+    pub detectable_pages: usize,
+    pub total_chunks: usize,
+    pub mapped_chunks: usize,
+    pub detectable_chunks: usize,
+    pub mapped_detectable_chunks: usize,
+    pub invalid_label_count: usize,
+    pub invalid_range_count: usize,
 }
 
-fn compute_printed_page_metrics(
+pub fn compute_printed_page_metrics(
     connection: &Connection,
     page_provenance: &[PageProvenanceEntry],
 ) -> Result<PrintedPageMetrics> {
@@ -120,7 +122,7 @@ fn compute_printed_page_metrics(
     Ok(metrics)
 }
 
-fn is_valid_printed_label(label: &str) -> bool {
+pub fn is_valid_printed_label(label: &str) -> bool {
     let value = label.trim();
     if value.is_empty() {
         return false;
@@ -135,7 +137,7 @@ fn is_valid_printed_label(label: &str) -> bool {
         .all(|ch| matches!(ch.to_ascii_lowercase(), 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
 }
 
-fn parse_numeric_printed_label(label: &str) -> Option<i64> {
+pub fn parse_numeric_printed_label(label: &str) -> Option<i64> {
     let value = label.trim();
     if value.chars().all(|ch| ch.is_ascii_digit()) {
         value.parse::<i64>().ok()
@@ -145,17 +147,17 @@ fn parse_numeric_printed_label(label: &str) -> Option<i64> {
 }
 
 #[derive(Debug, Default)]
-struct ClauseSplitMetrics {
-    clause_chunks_over_900: usize,
-    max_clause_chunk_words: Option<usize>,
-    overlap_pair_count: usize,
-    overlap_compliant_pairs: usize,
-    sequence_violations: usize,
-    exemption_count: usize,
-    non_exempt_oversize_chunks: usize,
+pub struct ClauseSplitMetrics {
+    pub clause_chunks_over_900: usize,
+    pub max_clause_chunk_words: Option<usize>,
+    pub overlap_pair_count: usize,
+    pub overlap_compliant_pairs: usize,
+    pub sequence_violations: usize,
+    pub exemption_count: usize,
+    pub non_exempt_oversize_chunks: usize,
 }
 
-fn compute_clause_split_metrics(connection: &Connection) -> Result<ClauseSplitMetrics> {
+pub fn compute_clause_split_metrics(connection: &Connection) -> Result<ClauseSplitMetrics> {
     let exemptions = load_q025_exemptions();
     let mut metrics = ClauseSplitMetrics {
         exemption_count: exemptions.len(),
@@ -238,7 +240,7 @@ fn compute_clause_split_metrics(connection: &Connection) -> Result<ClauseSplitMe
     Ok(metrics)
 }
 
-fn load_q025_exemptions() -> HashSet<(String, String)> {
+pub fn load_q025_exemptions() -> HashSet<(String, String)> {
     let Some(config_dir) = std::env::var("OPENCODE_CONFIG_DIR").ok() else {
         return HashSet::new();
     };
@@ -276,11 +278,11 @@ fn load_q025_exemptions() -> HashSet<(String, String)> {
         .collect::<HashSet<(String, String)>>()
 }
 
-fn count_words(text: &str) -> usize {
+pub fn count_words(text: &str) -> usize {
     text.split_whitespace().filter(|token| !token.is_empty()).count()
 }
 
-fn count_overlap_words(previous_text: &str, current_text: &str) -> usize {
+pub fn count_overlap_words(previous_text: &str, current_text: &str) -> usize {
     let previous_body = previous_text
         .split_once("\n\n")
         .map(|(_, body)| body)
@@ -315,12 +317,12 @@ fn count_overlap_words(previous_text: &str, current_text: &str) -> usize {
 }
 
 #[derive(Debug, Default)]
-struct NormalizationMetrics {
-    global_noise_ratio: Option<f64>,
-    target_noise_count: usize,
+pub struct NormalizationMetrics {
+    pub global_noise_ratio: Option<f64>,
+    pub target_noise_count: usize,
 }
 
-fn compute_normalization_metrics(
+pub fn compute_normalization_metrics(
     connection: &Connection,
     refs: &[GoldReference],
 ) -> Result<NormalizationMetrics> {
@@ -363,7 +365,7 @@ fn compute_normalization_metrics(
     })
 }
 
-fn contains_normalization_noise(text: &str) -> bool {
+pub fn contains_normalization_noise(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     let has_store_download = lower.contains("iso store order") && lower.contains("downloaded:");
     let has_single_user_notice =
@@ -375,7 +377,7 @@ fn contains_normalization_noise(text: &str) -> bool {
     has_store_download || has_single_user_notice || has_license_banner
 }
 
-fn estimate_dehyphenation_false_positive_rate(
+pub fn estimate_dehyphenation_false_positive_rate(
     latest_snapshot: Option<&NamedIngestRunSnapshot>,
 ) -> Option<f64> {
     let Some(snapshot) = latest_snapshot else {
@@ -397,11 +399,11 @@ fn estimate_dehyphenation_false_positive_rate(
 }
 
 #[derive(Debug, Default)]
-struct ListSemanticsMetrics {
-    list_items_total: usize,
-    list_semantics_complete: usize,
-    parent_depth_violations: usize,
-    list_parse_candidate_total: usize,
-    list_parse_fallback_total: usize,
+pub struct ListSemanticsMetrics {
+    pub list_items_total: usize,
+    pub list_semantics_complete: usize,
+    pub parent_depth_violations: usize,
+    pub list_parse_candidate_total: usize,
+    pub list_parse_fallback_total: usize,
 }
 

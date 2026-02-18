@@ -1,4 +1,6 @@
-fn stage_metric_check(
+use super::*;
+
+pub fn stage_metric_check(
     check_id: &str,
     name: &str,
     stage: Wp2GateStage,
