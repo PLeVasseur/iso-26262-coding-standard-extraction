@@ -23,6 +23,59 @@ Example:
 SMOKE_DETERMINISM=1 SMOKE_IDEMPOTENCE=1 scripts/smoke_part6.sh
 ```
 
+## Benchmark Query Modes (WP3-F)
+
+Use `scripts/benchmark_query_modes.sh` to benchmark `lexical`, `semantic`, and `hybrid` query modes with deterministic pass ordering and per-mode latency/candidate summaries.
+
+The script:
+
+- reads query cases from `.cache/iso26262/manifests/semantic_eval_queries.json`
+- runs warmup passes and timed passes for each mode
+- records p50/p95 latency and candidate-count distributions per mode
+- writes a benchmark report under `.cache/iso26262/manifests/semantic_benchmark_<timestamp>.json`
+- captures an environment manifest (CPU/memory/kernel/toolchain)
+
+Default run:
+
+```bash
+scripts/benchmark_query_modes.sh
+```
+
+Default profile is `quick` (fast local loop):
+
+- `BENCH_PROFILE=quick`: `BENCH_QUERY_LIMIT=20`, `WARMUP_PASSES=1`, `TIMED_PASSES=1`
+- `BENCH_PROFILE=standard`: `BENCH_QUERY_LIMIT=30`, `WARMUP_PASSES=1`, `TIMED_PASSES=2`
+- `BENCH_PROFILE=full`: `BENCH_QUERY_LIMIT=0` (all queries), `WARMUP_PASSES=2`, `TIMED_PASSES=5`
+
+Use explicit profile flags for heavier runs (`standard`/`full`).
+
+Common overrides:
+
+- `CACHE_ROOT` (default `.cache/iso26262`)
+- `QUERY_MANIFEST_PATH` (default `${CACHE_ROOT}/manifests/semantic_eval_queries.json`)
+- `BENCH_PROFILE` (default `quick`; use `standard` or `full` explicitly)
+- `MODES` (default `lexical semantic hybrid`)
+- `SEMANTIC_MODEL_ID` (default `miniLM-L6-v2-local-v1`)
+- `LEXICAL_K` / `SEMANTIC_K` / `RRF_K` (defaults `96/96/60`)
+- `TIMEOUT_MS` (default `2000`, set `0` to disable timeout guard)
+- `WARMUP_PASSES` / `TIMED_PASSES` (override profile defaults)
+- `BENCH_QUERY_LIMIT` (override profile default query count)
+- `BENCH_PROGRESS` (`0` default, set `1`/`true` for periodic progress + ETA logs)
+- `BENCH_PROGRESS_EVERY` (default `25`, log every N executed queries when progress is enabled)
+- `OUTPUT_DIR`, `OUTPUT_PATH`, `RUN_ID`
+
+Example reduced benchmark:
+
+```bash
+BENCH_PROFILE=standard BENCH_PROGRESS=1 scripts/benchmark_query_modes.sh
+```
+
+Example full evidence benchmark:
+
+```bash
+BENCH_PROFILE=full BENCH_PROGRESS=1 BENCH_PROGRESS_EVERY=100 scripts/benchmark_query_modes.sh
+```
+
 ## Refresh Local Quality Artifacts
 
 Use `scripts/refresh_quality_artifacts.sh` to run the phase gate bundle and refresh local run-state artifacts in `.cache/iso26262/manifests/`.
