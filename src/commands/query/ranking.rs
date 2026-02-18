@@ -1,4 +1,11 @@
-fn upsert_candidate(dedup: &mut HashMap<String, QueryCandidate>, mut candidate: QueryCandidate) {
+use std::collections::HashMap;
+
+use super::run::QueryCandidate;
+
+pub(super) fn upsert_candidate(
+    dedup: &mut HashMap<String, QueryCandidate>,
+    mut candidate: QueryCandidate,
+) {
     let Some(existing) = dedup.get_mut(&candidate.chunk_id) else {
         dedup.insert(candidate.chunk_id.clone(), candidate);
         return;

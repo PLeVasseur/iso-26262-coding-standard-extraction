@@ -1,12 +1,14 @@
-include!("run.rs");
-include!("retrieval.rs");
-include!("semantic_retrieval.rs");
-include!("fusion.rs");
-include!("intent.rs");
-include!("pinpoint.rs");
-include!("ranking.rs");
-include!("result_hydration.rs");
-include!("output.rs");
-include!("hierarchy.rs");
-include!("citation.rs");
-include!("text.rs");
+mod citation;
+mod fusion;
+mod hierarchy;
+mod intent;
+mod output;
+mod pinpoint;
+mod ranking;
+mod result_hydration;
+mod retrieval;
+mod run;
+mod semantic_retrieval;
+mod text;
+
+pub(crate) use run::run;

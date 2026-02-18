@@ -1,4 +1,13 @@
-fn fetch_descendants(connection: &Connection, origin_node_id: &str) -> Result<Vec<DescendantNode>> {
+use anyhow::Result;
+use rusqlite::{params, Connection};
+
+use super::run::DescendantNode;
+use super::text::condense_whitespace;
+
+pub(super) fn fetch_descendants(
+    connection: &Connection,
+    origin_node_id: &str,
+) -> Result<Vec<DescendantNode>> {
     let mut statement = connection.prepare(
         "
         WITH RECURSIVE descendants(
@@ -74,7 +83,7 @@ fn fetch_descendants(connection: &Connection, origin_node_id: &str) -> Result<Ve
     Ok(descendants)
 }
 
-fn resolve_parent_ref(
+pub(super) fn resolve_parent_ref(
     connection: &Connection,
     origin_node_id: Option<&str>,
 ) -> Result<Option<String>> {

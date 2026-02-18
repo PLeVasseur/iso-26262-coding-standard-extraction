@@ -1,155 +1,158 @@
-use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::cli::{FusionMode, QueryArgs, RetrievalMode};
-use crate::semantic::{
-    cosine_similarity, decode_embedding_blob, embed_text_local, resolve_model_config,
-};
+use crate::semantic::resolve_model_config;
+
+use super::fusion::fuse_rrf_candidates;
+use super::intent::is_exact_intent_query;
+use super::output::{write_json_response, write_text_response};
+use super::result_hydration::to_results;
+use super::retrieval::collect_lexical_candidates;
+use super::semantic_retrieval::{collect_semantic_candidates, semantic_index_status};
 
 const MAX_QUERY_CANDIDATES: usize = 256;
 
 #[derive(Debug, Clone)]
-struct QueryCandidate {
-    score: f64,
-    match_kind: String,
-    source_tags: Vec<String>,
-    lexical_rank: Option<usize>,
-    semantic_rank: Option<usize>,
-    lexical_score: Option<f64>,
-    semantic_score: Option<f64>,
-    rrf_score: Option<f64>,
-    chunk_id: String,
-    doc_id: String,
-    part: u32,
-    year: u32,
-    chunk_type: String,
-    reference: String,
-    heading: String,
-    page_pdf_start: Option<i64>,
-    page_pdf_end: Option<i64>,
-    source_hash: String,
-    snippet: String,
-    origin_node_id: Option<String>,
-    leaf_node_type: Option<String>,
-    ancestor_path: Option<String>,
-    anchor_type: Option<String>,
-    anchor_label_raw: Option<String>,
-    anchor_label_norm: Option<String>,
-    anchor_order: Option<i64>,
-    citation_anchor_id: Option<String>,
+pub(super) struct QueryCandidate {
+    pub(super) score: f64,
+    pub(super) match_kind: String,
+    pub(super) source_tags: Vec<String>,
+    pub(super) lexical_rank: Option<usize>,
+    pub(super) semantic_rank: Option<usize>,
+    pub(super) lexical_score: Option<f64>,
+    pub(super) semantic_score: Option<f64>,
+    pub(super) rrf_score: Option<f64>,
+    pub(super) chunk_id: String,
+    pub(super) doc_id: String,
+    pub(super) part: u32,
+    pub(super) year: u32,
+    pub(super) chunk_type: String,
+    pub(super) reference: String,
+    pub(super) heading: String,
+    pub(super) page_pdf_start: Option<i64>,
+    pub(super) page_pdf_end: Option<i64>,
+    pub(super) source_hash: String,
+    pub(super) snippet: String,
+    pub(super) origin_node_id: Option<String>,
+    pub(super) leaf_node_type: Option<String>,
+    pub(super) ancestor_path: Option<String>,
+    pub(super) anchor_type: Option<String>,
+    pub(super) anchor_label_raw: Option<String>,
+    pub(super) anchor_label_norm: Option<String>,
+    pub(super) anchor_order: Option<i64>,
+    pub(super) citation_anchor_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct DescendantNode {
-    node_id: String,
-    parent_node_id: Option<String>,
-    node_type: String,
-    reference: Option<String>,
-    heading: Option<String>,
-    order_index: i64,
-    page_pdf_start: Option<i64>,
-    page_pdf_end: Option<i64>,
-    text_preview: Option<String>,
+pub(super) struct DescendantNode {
+    pub(super) node_id: String,
+    pub(super) parent_node_id: Option<String>,
+    pub(super) node_type: String,
+    pub(super) reference: Option<String>,
+    pub(super) heading: Option<String>,
+    pub(super) order_index: i64,
+    pub(super) page_pdf_start: Option<i64>,
+    pub(super) page_pdf_end: Option<i64>,
+    pub(super) text_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct PinpointUnit {
-    unit_id: String,
-    unit_type: String,
-    score: f64,
-    text_preview: String,
-    token_signature: String,
-    char_start: Option<usize>,
-    char_end: Option<usize>,
-    row_idx: Option<i64>,
-    col_idx: Option<i64>,
-    row_key: Option<String>,
-    origin_node_id: Option<String>,
-    citation_anchor_id: Option<String>,
-    citation_anchor_compatible: bool,
+pub(super) struct PinpointUnit {
+    pub(super) unit_id: String,
+    pub(super) unit_type: String,
+    pub(super) score: f64,
+    pub(super) text_preview: String,
+    pub(super) token_signature: String,
+    pub(super) char_start: Option<usize>,
+    pub(super) char_end: Option<usize>,
+    pub(super) row_idx: Option<i64>,
+    pub(super) col_idx: Option<i64>,
+    pub(super) row_key: Option<String>,
+    pub(super) origin_node_id: Option<String>,
+    pub(super) citation_anchor_id: Option<String>,
+    pub(super) citation_anchor_compatible: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct QueryRankTrace {
-    lexical_rank: Option<usize>,
-    semantic_rank: Option<usize>,
-    lexical_score: Option<f64>,
-    semantic_score: Option<f64>,
-    rrf_score: Option<f64>,
+pub(super) struct QueryRankTrace {
+    pub(super) lexical_rank: Option<usize>,
+    pub(super) semantic_rank: Option<usize>,
+    pub(super) lexical_score: Option<f64>,
+    pub(super) semantic_score: Option<f64>,
+    pub(super) rrf_score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct QueryResult {
-    rank: usize,
-    score: f64,
-    match_kind: String,
-    source_tags: Vec<String>,
-    rank_trace: QueryRankTrace,
-    chunk_id: String,
-    doc_id: String,
-    part: u32,
-    year: u32,
-    chunk_type: String,
-    reference: String,
-    parent_ref: Option<String>,
-    heading: String,
-    page_pdf_start: Option<i64>,
-    page_pdf_end: Option<i64>,
-    source_hash: String,
-    snippet: String,
-    citation: String,
-    origin_node_id: Option<String>,
-    leaf_node_type: Option<String>,
-    ancestor_path: Option<String>,
-    anchor_type: Option<String>,
-    anchor_label_raw: Option<String>,
-    anchor_label_norm: Option<String>,
-    anchor_order: Option<i64>,
-    citation_anchor_id: Option<String>,
-    ancestor_nodes: Option<Vec<String>>,
-    descendants: Option<Vec<DescendantNode>>,
-    pinpoint_fallback_used: Option<bool>,
-    pinpoint_units: Option<Vec<PinpointUnit>>,
+pub(super) struct QueryResult {
+    pub(super) rank: usize,
+    pub(super) score: f64,
+    pub(super) match_kind: String,
+    pub(super) source_tags: Vec<String>,
+    pub(super) rank_trace: QueryRankTrace,
+    pub(super) chunk_id: String,
+    pub(super) doc_id: String,
+    pub(super) part: u32,
+    pub(super) year: u32,
+    pub(super) chunk_type: String,
+    pub(super) reference: String,
+    pub(super) parent_ref: Option<String>,
+    pub(super) heading: String,
+    pub(super) page_pdf_start: Option<i64>,
+    pub(super) page_pdf_end: Option<i64>,
+    pub(super) source_hash: String,
+    pub(super) snippet: String,
+    pub(super) citation: String,
+    pub(super) origin_node_id: Option<String>,
+    pub(super) leaf_node_type: Option<String>,
+    pub(super) ancestor_path: Option<String>,
+    pub(super) anchor_type: Option<String>,
+    pub(super) anchor_label_raw: Option<String>,
+    pub(super) anchor_label_norm: Option<String>,
+    pub(super) anchor_order: Option<i64>,
+    pub(super) citation_anchor_id: Option<String>,
+    pub(super) ancestor_nodes: Option<Vec<String>>,
+    pub(super) descendants: Option<Vec<DescendantNode>>,
+    pub(super) pinpoint_fallback_used: Option<bool>,
+    pub(super) pinpoint_units: Option<Vec<PinpointUnit>>,
 }
 
 #[derive(Debug, Serialize)]
-struct RetrievalMetadata {
-    requested_mode: String,
-    effective_mode: String,
-    lexical_k: usize,
-    semantic_k: usize,
-    lexical_candidate_count: usize,
-    semantic_candidate_count: usize,
-    fused_candidate_count: usize,
-    fusion: String,
-    rrf_k: u32,
-    semantic_model_id: Option<String>,
-    exact_intent: bool,
-    exact_intent_forced_lexical: bool,
-    fallback_used: bool,
-    fallback_reason: Option<String>,
-    pinpoint_enabled: bool,
-    pinpoint_max_units: usize,
-    timeout_ms: u64,
-    query_duration_ms: f64,
+pub(super) struct RetrievalMetadata {
+    pub(super) requested_mode: String,
+    pub(super) effective_mode: String,
+    pub(super) lexical_k: usize,
+    pub(super) semantic_k: usize,
+    pub(super) lexical_candidate_count: usize,
+    pub(super) semantic_candidate_count: usize,
+    pub(super) fused_candidate_count: usize,
+    pub(super) fusion: String,
+    pub(super) rrf_k: u32,
+    pub(super) semantic_model_id: Option<String>,
+    pub(super) exact_intent: bool,
+    pub(super) exact_intent_forced_lexical: bool,
+    pub(super) fallback_used: bool,
+    pub(super) fallback_reason: Option<String>,
+    pub(super) pinpoint_enabled: bool,
+    pub(super) pinpoint_max_units: usize,
+    pub(super) timeout_ms: u64,
+    pub(super) query_duration_ms: f64,
 }
 
 #[derive(Debug, Serialize)]
-struct QueryResponse {
-    query: String,
-    limit: usize,
-    returned: usize,
-    part_filter: Option<u32>,
-    chunk_type_filter: Option<String>,
-    node_type_filter: Option<String>,
-    retrieval: RetrievalMetadata,
-    results: Vec<QueryResult>,
+pub(super) struct QueryResponse {
+    pub(super) query: String,
+    pub(super) limit: usize,
+    pub(super) returned: usize,
+    pub(super) part_filter: Option<u32>,
+    pub(super) chunk_type_filter: Option<String>,
+    pub(super) node_type_filter: Option<String>,
+    pub(super) retrieval: RetrievalMetadata,
+    pub(super) results: Vec<QueryResult>,
 }
 
 pub fn run(args: QueryArgs) -> Result<()> {
@@ -391,7 +394,7 @@ fn clamp_candidates(value: usize) -> usize {
 }
 
 #[derive(Clone, Copy)]
-struct QueryTimeoutBudget {
+pub(super) struct QueryTimeoutBudget {
     started: Instant,
     timeout_ms: u64,
 }
@@ -426,14 +429,17 @@ impl QueryTimeoutBudget {
     }
 }
 
-fn enforce_timeout(timeout_budget: Option<QueryTimeoutBudget>, stage: &str) -> Result<()> {
+pub(super) fn enforce_timeout(
+    timeout_budget: Option<QueryTimeoutBudget>,
+    stage: &str,
+) -> Result<()> {
     if let Some(timeout_budget) = timeout_budget {
         timeout_budget.enforce(stage)?;
     }
     Ok(())
 }
 
-fn sort_candidates(candidates: &mut [QueryCandidate]) {
+pub(super) fn sort_candidates(candidates: &mut [QueryCandidate]) {
     candidates.sort_by(|left, right| {
         right
             .score

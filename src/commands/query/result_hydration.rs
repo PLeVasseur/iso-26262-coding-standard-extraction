@@ -1,4 +1,13 @@
-fn to_results(
+use anyhow::Result;
+use rusqlite::Connection;
+
+use super::citation::render_citation;
+use super::hierarchy::{fetch_descendants, resolve_parent_ref};
+use super::pinpoint::compute_pinpoint_units_for_candidate;
+use super::run::{QueryCandidate, QueryRankTrace, QueryResult};
+use super::text::condense_whitespace;
+
+pub(super) fn to_results(
     connection: &Connection,
     query_text: &str,
     candidates: Vec<QueryCandidate>,

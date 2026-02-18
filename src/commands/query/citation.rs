@@ -1,4 +1,6 @@
-fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
+use super::run::QueryCandidate;
+
+pub(super) fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
     match (start, end) {
         (Some(start), Some(end)) if start == end => start.to_string(),
         (Some(start), Some(end)) => format!("{start}-{end}"),
@@ -8,7 +10,7 @@ fn format_page_range(start: Option<i64>, end: Option<i64>) -> String {
     }
 }
 
-fn render_citation(candidate: &QueryCandidate) -> String {
+pub(super) fn render_citation(candidate: &QueryCandidate) -> String {
     let reference = if candidate.reference.is_empty() {
         "(unreferenced chunk)".to_string()
     } else {

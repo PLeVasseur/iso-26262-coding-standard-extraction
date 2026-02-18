@@ -1,7 +1,15 @@
+use std::collections::HashSet;
+
+use anyhow::Result;
+use rusqlite::{Connection, OptionalExtension};
+
+use super::run::{PinpointUnit, QueryCandidate};
+use super::text::condense_whitespace;
+
 #[derive(Debug, Clone)]
-struct PinpointComputation {
-    units: Vec<PinpointUnit>,
-    fallback_used: bool,
+pub(super) struct PinpointComputation {
+    pub(super) units: Vec<PinpointUnit>,
+    pub(super) fallback_used: bool,
 }
 
 const PINPOINT_QUERY_STOPWORDS: &[&str] = &[
@@ -45,7 +53,7 @@ struct PinpointUnitDraft {
     citation_anchor_id: Option<String>,
 }
 
-fn compute_pinpoint_units_for_candidate(
+pub(super) fn compute_pinpoint_units_for_candidate(
     connection: &Connection,
     candidate: &QueryCandidate,
     query_text: &str,

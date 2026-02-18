@@ -1,5 +1,12 @@
+use std::io::{self, Write};
+
+use anyhow::{Context, Result};
+
+use super::citation::format_page_range;
+use super::run::{QueryResponse, QueryResult, RetrievalMetadata};
+
 #[allow(clippy::too_many_arguments)]
-fn write_json_response(
+pub(super) fn write_json_response(
     query_text: &str,
     limit: usize,
     part_filter: Option<u32>,
@@ -27,7 +34,7 @@ fn write_json_response(
     Ok(())
 }
 
-fn write_text_response(
+pub(super) fn write_text_response(
     query_text: &str,
     retrieval: &RetrievalMetadata,
     results: &[QueryResult],

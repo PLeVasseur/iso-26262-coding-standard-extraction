@@ -1,4 +1,12 @@
-fn fuse_rrf_candidates(
+use std::collections::HashMap;
+
+use anyhow::Result;
+
+use crate::cli::FusionMode;
+
+use super::run::{sort_candidates, QueryCandidate};
+
+pub(super) fn fuse_rrf_candidates(
     lexical_candidates: &[QueryCandidate],
     semantic_candidates: &[QueryCandidate],
     rrf_k: u32,

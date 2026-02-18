@@ -1,4 +1,4 @@
-fn to_fts_query(query_text: &str) -> String {
+pub(super) fn to_fts_query(query_text: &str) -> String {
     query_text
         .split_whitespace()
         .filter(|token| !token.trim().is_empty())
@@ -7,6 +7,6 @@ fn to_fts_query(query_text: &str) -> String {
         .join(" ")
 }
 
-fn condense_whitespace(input: &str) -> String {
+pub(super) fn condense_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<&str>>().join(" ")
 }

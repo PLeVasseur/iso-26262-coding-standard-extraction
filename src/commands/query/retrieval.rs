@@ -1,4 +1,13 @@
-fn collect_lexical_candidates(
+use std::collections::HashMap;
+
+use anyhow::Result;
+use rusqlite::{params, Connection};
+
+use super::ranking::upsert_candidate;
+use super::run::{sort_candidates, QueryCandidate};
+use super::text::to_fts_query;
+
+pub(super) fn collect_lexical_candidates(
     connection: &Connection,
     query_text: &str,
     part_filter: Option<u32>,

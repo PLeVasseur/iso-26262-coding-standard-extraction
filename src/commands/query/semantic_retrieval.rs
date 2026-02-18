@@ -1,9 +1,19 @@
-struct SemanticIndexStatus {
-    available: bool,
-    reason: Option<String>,
+use anyhow::Result;
+use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::semantic::{cosine_similarity, decode_embedding_blob, embed_text_local};
+
+use super::run::{enforce_timeout, sort_candidates, QueryCandidate, QueryTimeoutBudget};
+
+pub(super) struct SemanticIndexStatus {
+    pub(super) available: bool,
+    pub(super) reason: Option<String>,
 }
 
-fn semantic_index_status(connection: &Connection, model_id: &str) -> Result<SemanticIndexStatus> {
+pub(super) fn semantic_index_status(
+    connection: &Connection,
+    model_id: &str,
+) -> Result<SemanticIndexStatus> {
     let embeddings_table_exists = connection
         .query_row(
             "
@@ -62,7 +72,7 @@ fn semantic_index_status(connection: &Connection, model_id: &str) -> Result<Sema
 }
 
 #[allow(clippy::too_many_arguments)]
-fn collect_semantic_candidates(
+pub(super) fn collect_semantic_candidates(
     connection: &Connection,
     query_text: &str,
     part_filter: Option<u32>,

@@ -1,4 +1,4 @@
-fn is_exact_intent_query(query_text: &str) -> bool {
+pub(super) fn is_exact_intent_query(query_text: &str) -> bool {
     let trimmed = query_text.trim();
     if trimmed.is_empty() {
         return false;
