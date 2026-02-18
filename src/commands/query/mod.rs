@@ -1,6 +1,12 @@
 include!("run.rs");
 include!("retrieval.rs");
-include!("semantic_and_fusion.rs");
+include!("semantic_retrieval.rs");
+include!("fusion.rs");
+include!("intent.rs");
 include!("pinpoint.rs");
-include!("ranking_and_output.rs");
-include!("hierarchy_and_citation.rs");
+include!("ranking.rs");
+include!("result_hydration.rs");
+include!("output.rs");
+include!("hierarchy.rs");
+include!("citation.rs");
+include!("text.rs");
