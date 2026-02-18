@@ -425,7 +425,7 @@ jq -n \
 echo "[bench] wrote benchmark report: ${OUTPUT_PATH}"
 jq -r '
   .mode_summaries[]
-  | "[bench] mode=\(.mode) queries=\(.completed_timed_queries)/\(.expected_timed_queries) failures=\(.timed_failure_count) p50=\(.latency_ms.p50 // "n/a")ms p95=\(.latency_ms.p95 // "n/a")ms"
+  | "[bench] mode=\(.mode) queries=\(.completed_timed_queries)/\(.expected_timed_queries) failures=\(.timed_failure_count) p50=\(.latency_ms.p50 // "n/a")ms p95=\(.latency_ms.p95 // "n/a")ms p99=\(.latency_ms.p99 // "n/a")ms"
 ' "${OUTPUT_PATH}"
 
 if is_truthy "${BENCH_PROGRESS}"; then

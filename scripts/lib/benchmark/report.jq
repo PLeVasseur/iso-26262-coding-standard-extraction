@@ -24,7 +24,8 @@ def numeric_stats(values):
     max: (values | max?),
     mean: (values | mean),
     p50: (values | percentile(0.50)),
-    p95: (values | percentile(0.95))
+    p95: (values | percentile(0.95)),
+    p99: (values | percentile(0.99))
   };
 
 def mode_summary(mode_name):

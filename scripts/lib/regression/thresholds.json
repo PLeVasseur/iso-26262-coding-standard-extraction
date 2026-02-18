@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "hard": {
+    "determinism_min": 1.0,
+    "citation_top1_min_delta": 0.0,
+    "top1_expected_hit_floor": 0.95,
+    "no_result_rate_max_increase": 0.05,
+    "timeout_rate_max_increase": 0.02,
+    "new_failed_checks_block": true
+  },
+  "soft": {
+    "metric_abs_drop_max": 0.005,
+    "benchmark_p95_ms_max_increase": 5.0,
+    "benchmark_p95_rel_max_increase": 0.1,
+    "fallback_ratio_max_increase": 0.02,
+    "jaccard_at_10_min": 0.9,
+    "candidate_count_rel_increase_max": 0.2
+  }
+}
